@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Direitos do app (entitlements). O source-recomp pede este mesmo no projeto de assinatura
+	     dele: sobe o limite de memória que o iOS dá ao app. Exige a capacidade "Increased Memory
+	     Limit" ligada no App ID. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,131 @@
+name: Gerar app (TestFlight)
+
+# Cada push gera uma build e manda ao TestFlight (mudança só em .md não gera).
+# Sem push, dá para rodar à mão: Actions > Gerar app (TestFlight) > Run workflow.
+#
+# Este repositório é público e nada da Valve pode aparecer nele:
+#   - os binários Linux do jogo vêm de um repositório privado (segredo DEPOT_TOKEN);
+#   - o código traduzido só fica em cache cifrado (segredo CACHE_SENHA);
+#   - o único artifact são os logs, e os trechos de código saem deles (scripts/comum.sh);
+#   - o app vai direto do runner para o TestFlight.
+on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# um push novo cancela a build anterior (ela leva de uma a duas horas na primeira vez)
+concurrency:
+  group: gerar-app
+  cancel-in-progress: true
+
+jobs:
+  app:
+    runs-on: macos-26
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versões fixadas
+        run: grep -E '^[A-Z0-9_]+=' versoes.env | tee -a "$GITHUB_ENV"
+
+      - name: Escolher o Xcode 26
+        run: bash scripts/escolher-xcode.sh
+
+      - name: Ferramentas
+        run: bash scripts/ferramentas.sh
+
+      - name: Baixar o source-recomp e aplicar as mudanças
+        run: bash scripts/baixar-recomp.sh
+
+      - name: Baixar os binários Linux do jogo (repositório privado)
+        env:
+          DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
+        run: bash scripts/baixar-depot.sh
+
+      # SDL2, FreeType, gl4es e a biblioteca do Metal: código aberto, cache comum
+      - name: Cache das dependências (restaurar)
+        id: cache-deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            trabalho/deps-ios/device
+            trabalho/metal/libd3d9metal.a
+          key: deps-${{ env.RECOMP_COMMIT }}-${{ env.MTLD3D_COMMIT }}-${{ env.XCODE_ESCOLHIDO }}
+
+      - name: Dependências de iPhone (SDL2, FreeType, gl4es)
+        run: bash scripts/deps-ios.sh
+
+      - name: Renderizador Metal (libd3d9metal)
+        run: bash scripts/metal.sh
+
+      - name: Cache das dependências (guardar)
+        if: steps.cache-deps.outputs.cache-hit != 'true' && hashFiles('trabalho/metal/libd3d9metal.a') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            trabalho/deps-ios/device
+            trabalho/metal/libd3d9metal.a
+          key: deps-${{ env.RECOMP_COMMIT }}-${{ env.MTLD3D_COMMIT }}-${{ env.XCODE_ESCOLHIDO }}
+
+      # O código traduzido é o jogo: o cache dele só existe cifrado (scripts/cache.sh)
+      - name: Cache do código traduzido (restaurar, cifrado)
+        uses: actions/cache/restore@v4
+        with:
+          path: trabalho/cache-cifrado
+          key: traduzido-${{ env.RECOMP_COMMIT }}-${{ github.run_number }}-${{ github.run_attempt }}
+          restore-keys: |
+            traduzido-${{ env.RECOMP_COMMIT }}-
+
+      - name: Abrir o cache
+        env:
+          CACHE_SENHA: ${{ secrets.CACHE_SENHA }}
+        run: bash scripts/cache.sh abrir
+
+      - name: Traduzir e compilar o jogo
+        run: bash scripts/compilar.sh
+
+      - name: Fechar o cache (cifrar)
+        if: always()
+        env:
+          CACHE_SENHA: ${{ secrets.CACHE_SENHA }}
+        run: bash scripts/cache.sh fechar
+
+      - name: Cache do código traduzido (guardar, cifrado)
+        if: always() && hashFiles('trabalho/cache-cifrado/traduzido.tar.zst.enc') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: trabalho/cache-cifrado
+          key: traduzido-${{ env.RECOMP_COMMIT }}-${{ github.run_number }}-${{ github.run_attempt }}
+
+      - name: Montar o app
+        env:
+          BUILD: ${{ github.run_number }}
+          APP_ICON_SVG: ${{ secrets.APP_ICON_SVG }}
+        run: bash scripts/montar-app.sh
+
+      # A assinatura é a gerenciada pela Apple (cloud signing): nenhum certificado no runner.
+      - name: Enviar ao TestFlight
+        env:
+          BUILD: ${{ github.run_number }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/enviar-testflight.sh
+
+      - name: Resumo dos erros (se falhar)
+        if: failure()
+        run: bash scripts/resumo-erros.sh
+
+      # Só os logs saem como artifact, e sem trechos do código traduzido.
+      - name: Guardar os logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: logs/
+          if-no-files-found: ignore

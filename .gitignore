@@ -1,0 +1,46 @@
+# saídas do build (no Actions ou numa máquina local)
+trabalho/
+logs/
+build/
+*.ipa
+*.xcarchive
+
+# NADA DA VALVE NESTE REPOSITÓRIO (ele é público): binários do jogo, dados do jogo e o logo
+depot_224/
+depot_*/
+*.zip
+*.7z
+*.rar
+*.so
+*.so.*
+*.asi
+*.vpk
+*.bsp
+*.mdl
+*.vtf
+*.vmt
+*.wav
+*.mp3
+*.bik
+hl2_linux*
+game/
+prep/
+linux/
+*.svg
+*.png
+*.ico
+*.icns
+
+# chaves e segredos
+*.p8
+*.p12
+*.mobileprovision
+.env
+.env.*
+
+# pastas de entrega
+PARA-A-PASTA-*/
+_subir/
+
+# python
+__pycache__/

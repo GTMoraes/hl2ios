@@ -1,0 +1,38 @@
+diff --git a/ios/main_ios.c b/ios/main_ios.c
+index 0b1164c..4564fa2 100644
+--- a/ios/main_ios.c
++++ b/ios/main_ios.c
+@@ -23,6 +23,8 @@
+ #include "settings.h"
+ 
+ int p2_main(int argc, char **argv);
++// hl2ios (runtime/ios/hl2ios_dados.m): espera a pasta Documents/game ficar completa.
++void hl2ios_esperar_dados(const char *documents);
+ 
+ static char *arguments[256];
+ static int count;
+@@ -134,6 +136,9 @@ int main(int argc, char **argv) {
+         char documents[PATH_MAX];
+         snprintf(documents, sizeof(documents), "%s/Documents", getenv("HOME"));
+         mkdir(documents, 0755);
++        // hl2ios: sem os dados do jogo o runtime sairia na hora (tela preta e app
++        // fechado); a tela de espera diz o que copiar e só segue com tudo no lugar.
++        hl2ios_esperar_dados(documents);
+         static const struct { const char *option, *folder; int create; } defaults[] = {
+             {"--user-dir", NULL, 1}, {"--images", "prep", 0},
+             {"--game-dir", "game", 0}, {"--linux-root", "linux", 0}};
+@@ -144,7 +149,13 @@ int main(int argc, char **argv) {
+             snprintf(path, sizeof(path), "%s/%s", documents, defaults[d].folder ? defaults[d].folder : game->userdata);
+             if (present) continue;
+             if (defaults[d].create) mkdir(path, 0755);
+-            else if (stat(path, &st) || !S_ISDIR(st.st_mode)) continue;
++            else if (stat(path, &st) || !S_ISDIR(st.st_mode)) {
++                // hl2ios: prep e linux vêm dentro do app (scripts/montar-app.sh);
++                // uma pasta de mesmo nome em Documents continua valendo primeiro.
++                snprintf(path, sizeof(path), "%s/%s", bundle, defaults[d].folder);
++                if (stat(path, &st) || !S_ISDIR(st.st_mode)) continue;
++                fprintf(stderr, "[hl2ios] %s : dentro do app (%s)\n", defaults[d].option, path);
++            }
+             memmove(arguments + 3, arguments + 1, (size_t)(count - 1) * sizeof(*arguments));
+             arguments[1] = strdup(defaults[d].option); arguments[2] = strdup(path);
+             count += 2;

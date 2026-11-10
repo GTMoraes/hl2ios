@@ -1,0 +1,29 @@
+diff --git a/tools/build_ios.py b/tools/build_ios.py
+index 7bb36e8..da77951 100644
+--- a/tools/build_ios.py
++++ b/tools/build_ios.py
+@@ -121,9 +121,10 @@ def main():
+     frameworks = FRAMEWORKS + (D3D9METAL_FRAMEWORKS if d3d9metal else [])
+     link = ['clang', *base, f'@{response}', *libs, *([str(d3d9metal)] if d3d9metal else []), '-liconv',
+             *[x for f in frameworks for x in ('-framework', f)],
+-            # Le SDK 27 impose UIScene, que SDL2 ignore : déclarer un SDK 18
+-            # garde le cycle de vie classique d'UIKit (voir ios/probe).
+-            f'-Wl,-platform_version,{target["platform"]},17.0,18.0',
++            # hl2ios: o original declarava o SDK 18 aqui (-platform_version) para o
++            # UIKit manter o ciclo de vida clássico com o SDK 27. O App Store Connect
++            # recusa SDK antigo, então o app declara o SDK de verdade: o build usa o
++            # Xcode 26 (scripts/escolher-xcode.sh), que ainda não exige UIScene.
+             '-o', str(app / game['ios_executable'])]
+     subprocess.run(link, check=True)
+     plist = (ROOT / 'ios/Info.plist.in').read_text()
+@@ -139,7 +140,9 @@ def main():
+     if args.target == 'sim':
+         subprocess.run(['codesign', '-s', '-', '-f', str(app)], check=True)
+     else:
+-        subprocess.run([sys.executable, str(ROOT / 'ios/signing/sign.py'), str(app)], check=True)
++        # hl2ios: sem ios/signing/sign.py (perfil de desenvolvimento do Xcode). O app
++        # é assinado depois, em scripts/montar-app.sh e scripts/enviar-testflight.sh.
++        print('hl2ios: assinatura deixada para o envio ao TestFlight')
+     size = (app / game['ios_executable']).stat().st_size
+     print(f'{app} : exécutable {size / 1e6:.0f} Mo, {time.time() - started:.0f} s au total')
+     print(f'rendu Metal : {d3d9metal}' if d3d9metal else 'rendu Metal : absent (OpenGL seulement, voir --d3d9metal)')
