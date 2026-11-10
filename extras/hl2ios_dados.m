@@ -42,6 +42,25 @@ static int hl2ios_faltam(const char *documents, char *lista, size_t tamanho) {
     return faltam;
 }
 
+// O app Arquivos só mostra a pasta de um app em "No Meu iPhone" quando há algo dentro de
+// Documents. O source-recomp cria ali a pasta dos saves, mas só depois deste ponto: enquanto
+// a tela de espera está aberta, Documents ficaria vazio e a pasta do app não apareceria.
+// Então a pasta game já nasce aqui, com um bilhete do que copiar para dentro dela.
+static void hl2ios_preparar_pasta(const char *documents) {
+    char caminho[PATH_MAX];
+    snprintf(caminho, sizeof(caminho), "%s/game", documents);
+    mkdir(caminho, 0755);
+    snprintf(caminho, sizeof(caminho), "%s/COPIE-PARA-A-PASTA-game.txt", documents);
+    FILE *bilhete = fopen(caminho, "w");
+    if (!bilhete) return;
+    fputs("Half-Life 2 no iPhone\n\n"
+          "Copie para dentro da pasta \"game\", da pasta do jogo na Steam\n"
+          "(steamapps\\common\\Half-Life 2), estas sete pastas:\n\n"
+          "  bin\n  platform\n  hl2\n  episodic\n  ep2\n  lostcoast\n  hl2_complete\n\n"
+          "Depois abra o app e toque em Iniciar o jogo.\n", bilhete);
+    fclose(bilhete);
+}
+
 @interface HL2iosEspera : UIViewController
 @property (nonatomic, copy) NSString *documentos;
 @property (nonatomic, strong) UILabel *texto;
@@ -110,7 +129,7 @@ static int hl2ios_faltam(const char *documents, char *lista, size_t tamanho) {
     if (faltam > 0) {
         mensagem = [NSString stringWithFormat:
             @"Half-Life 2: faltam os dados do jogo.\n\n"
-            @"No app Arquivos, em No Meu iPhone › Half-Life 2, crie a pasta \"game\" e copie para dentro dela,\n"
+            @"No app Arquivos, em No Meu iPhone › Half-Life 2, copie para dentro da pasta \"game\",\n"
             @"da pasta do jogo na Steam: bin, platform, hl2, episodic, ep2, lostcoast e hl2_complete.\n\n"
             @"Ainda faltam: %s.\nEsta tela se atualiza sozinha.", lista[0] ? lista : "todas"];
     } else {
@@ -129,6 +148,7 @@ void hl2ios_esperar_dados(const char *documents);
 
 void hl2ios_esperar_dados(const char *documents) {
     if (!documents || !hl2ios_faltam(documents, NULL, 0)) return;
+    hl2ios_preparar_pasta(documents);
     fprintf(stderr, "[hl2ios] Documents/game incompleta: tela de espera\n");
     @autoreleasepool {
         UIWindow *janela = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];

@@ -5,10 +5,8 @@ App de iPhone com o Half-Life 2, o Episode One, o Episode Two e o Lost Coast, ge
 é traduzido para C e compilado para ARM64, sem emulador e sem JIT. O build roda no GitHub Actions
 (runner macOS) e o app chega pelo TestFlight, como o `hlios` e o `nfios`.
 
-**Estado: etapa 1, escrita em 10/11/2026 e ainda não compilada nenhuma vez.** O objetivo desta
-etapa é a build chegar ao TestFlight e o app abrir. Os scripts foram conferidos no que dá para
-conferir fora de um Mac (sintaxe, patches aplicando, cache cifrado, ícone, Info.plist); a parte de
-Xcode só se prova rodando.
+**Estado: etapa 1.** Em 10/11/2026 a build chegou ao TestFlight e o app abriu no iPhone 17. Falta
+copiar os dados do jogo e jogar (etapa 2).
 
 ## Regra deste repositório: nada da Valve aqui
 
@@ -126,11 +124,13 @@ O push já dispara a build (aba Actions).
 
 ## No iPhone
 
-1. Instale pelo TestFlight e abra uma vez. Aparece a tela de espera.
-2. No PC, crie uma pasta `game` e copie para dentro dela, de `steamapps\common\Half-Life 2`:
-   `bin`, `platform`, `hl2`, `episodic`, `ep2`, `lostcoast` e `hl2_complete` (uns 10 GB).
-3. Leve a pasta `game` para o iPhone: app Arquivos › No Meu iPhone › Half-Life 2. Pelo cabo, o app
-   Dispositivos Apple do Windows mostra essa mesma pasta na aba Arquivos.
+1. Instale pelo TestFlight e abra uma vez. Aparece a tela de espera, e o app cria a pasta `game`
+   (com um bilhete ao lado). É isso que faz a pasta "Half-Life 2" aparecer no app Arquivos: o iOS
+   não mostra a pasta de um app enquanto ela está vazia.
+2. Copie para dentro de `game`, de `steamapps\common\Half-Life 2`: `bin`, `platform`, `hl2`,
+   `episodic`, `ep2`, `lostcoast` e `hl2_complete` (uns 10 GB).
+3. O destino é app Arquivos › No Meu iPhone › Half-Life 2 › game. Pelo cabo, o app Dispositivos
+   Apple do Windows mostra essa mesma pasta na aba Arquivos, e é o caminho mais rápido para 10 GB.
 4. Ligue Ajustes › Apps › Half-Life 2 › Log. O registro fica em `game.log`, na mesma pasta.
 5. Abra o app. Com as sete pastas no lugar e a cópia terminada, toque em Iniciar.
 
@@ -149,15 +149,13 @@ linha com "target not recompiled" e o endereço.
 
 ## Riscos conhecidos desta etapa
 
-- **Nunca rodou.** A primeira build pode parar em algum passo que só um Mac mostra.
+- **O jogo ainda não rodou no iPhone.** A build passa e o app abre; daqui em diante é terreno novo.
 - **Memória do runner (7 GB)** na tradução e na ligação de um executável deste tamanho.
 - **Limite de 500 MB de código** do App Store Connect.
 - **`prep` e `linux` dentro do app** não é como o projeto roda. A pasta do app é só de leitura; se
   o jogo tentar gravar ali, o conserto é copiar essas pastas para Documents no primeiro uso.
 - **Arquivos ELF e DLL dentro do app** (o depot): não conheço regra do envio contra eles, mas é a
   primeira vez que passam por ele.
-- **Tela de espera** escrita sem compilar. Se ela falhar ao compilar, só esse arquivo é refeito na
-  build seguinte.
 - **iPhone 17:** o projeto só foi testado num iPhone 15 Pro Max.
 
 ## Atualizar
