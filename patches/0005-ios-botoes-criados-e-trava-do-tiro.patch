@@ -1,0 +1,115 @@
+--- a/runtime/ios/touch_layout.h
++++ b/runtime/ios/touch_layout.h
+@@ -21,6 +21,8 @@
+     RT_TOUCH_QUICKSAVE,     // F6 (save quick)
+     RT_TOUCH_LONG_JUMP,     // hl2ios : espace + Ctrl gauche (pulo agachado, alias « +jump; +duck »)
+     RT_TOUCH_EDIT,          // hl2ios : ouvre l'éditeur des commandes (hl2ios_toque.m)
++    RT_TOUCH_CUSTOM,        // hl2ios : boutons créés dans l'éditeur (24 au plus, hl2ios_toque.m)
++    RT_TOUCH_CUSTOM_LAST = RT_TOUCH_CUSTOM + 23,
+     RT_TOUCH_ACTION_COUNT
+ } rt_touch_action;
+ 
+--- a/runtime/ios/touch_controls.m
++++ b/runtime/ios/touch_controls.m
+@@ -56,6 +56,7 @@
+ #include "gyro_ios.h"
+ #include "touch_layout.h"
+ #include "hl2ios_toque.h"   // hl2ios : éditeur des commandes et réglages enregistrés
++#include "hl2ios_jogo.h"    // hl2ios : arme rangée (tir bloqué) et commandes des boutons créés
+ #include "touch_test.h"
+ #include "lifecycle_ios.h"
+ 
+@@ -69,7 +70,7 @@
+ typedef rt_touch_action Action;
+ enum { MOUSE_LEFT = RT_TOUCH_FIRE, MOUSE_RIGHT = RT_TOUCH_ALT_FIRE, ACTION_COUNT = RT_TOUCH_ACTION_COUNT };
+ typedef struct { Action action; NSString *symbol; UIColor *color; CGPoint at; CGFloat size; unsigned flags; } Button;
+-enum { MAX_BUTTONS = 16 };
++enum { MAX_BUTTONS = 40 };   // hl2ios : 16 de la table + 24 créés dans l'éditeur
+ 
+ // Manette virtuelle : deux axes seulement (stick gauche), aucun bouton, pour
+ // qu'elle ne porte aucune autre commande que le déplacement.
+@@ -226,6 +227,8 @@
+     NSMapTable<UITouch *, P2Finger *> *fingers;
+     int held[ACTION_COUNT];   // nombre de doigts par action
+     BOOL toggled[ACTION_COUNT]; // boutons à bascule enfoncés (sprint, accroupi de HL2)
++    BOOL blocked[ACTION_COUNT]; // hl2ios : appui de tir avalé (arme rangée), relâchement avalé aussi
++    unsigned jogoVersao;        // hl2ios : hl2ios_jogo_versao() de la disposition affichée
+     BOOL wasd[4];             // W, A, S, D enfoncées
+     BOOL concealed;           // cachée pour une manette ou un clavier
+     BOOL menu;                // interface du jeu affichée : surcouche effacée
+@@ -330,6 +333,8 @@
+     [self backTapStep:orient playing:playing now:now];
+     [self gyroStep:orient playing:playing now:now];
+     [self quickSaveStep:now];
++    // hl2ios : arme rangée ou sortie : icônes du tir et du bouton « ranger » refaites.
++    if (hl2ios_jogo_versao() != jogoVersao) { jogoVersao = hl2ios_jogo_versao(); [self invalidateLayout]; }
+     if (playing && now - hapticPreparedAt > 1) {
+         hapticPreparedAt = now;
+         haptic_prepare();
+@@ -495,6 +500,12 @@
+     held[action] = MAX(0, held[action] + (down ? 1 : -1));
+     if ((before > 0) == (held[action] > 0)) return;
+     CGPoint centre = CGPointMake(CGRectGetMidX(self.bounds), CGRectGetMidY(self.bounds));
++    // hl2ios : arme rangée par le bouton « ranger » : tir, tir secondaire et recharge ne
++    // partent pas ; l'appui ressort l'arme (hl2ios_jogo.c), sans tirer.
++    if (action == RT_TOUCH_FIRE || action == RT_TOUCH_ALT_FIRE || action == RT_TOUCH_RELOAD) {
++        if (down && hl2ios_jogo_bloqueia_tiro()) { blocked[action] = YES; hl2ios_jogo_sacar(); return; }
++        if (!down && blocked[action]) { blocked[action] = NO; return; }
++    }
+     switch (action) {
+     case RT_TOUCH_JUMP: [self key:SDL_SCANCODE_SPACE down:down]; break;
+     case RT_TOUCH_CROUCH: [self key:SDL_SCANCODE_LCTRL down:down]; break;
+@@ -513,7 +524,10 @@
+     // hl2ios : saut puis accroupi (comptés comme leurs boutons : un accroupi en bascule reste tenu).
+     case RT_TOUCH_LONG_JUMP: [self action:RT_TOUCH_JUMP down:down]; [self action:RT_TOUCH_CROUCH down:down]; break;
+     case RT_TOUCH_EDIT: if (down) [self openEditor]; break;
+-    default: break;
++    default:
++        // hl2ios : bouton créé dans l'éditeur (commande, arme, ranger l'arme).
++        if (action >= RT_TOUCH_CUSTOM && action <= RT_TOUCH_CUSTOM_LAST) hl2ios_toque_executar((int)(action - RT_TOUCH_CUSTOM), down);
++        break;
+     }
+ }
+ - (void)untoggle:(Action)action {
+@@ -564,14 +578,16 @@
+ // Icône SF Symbols teintée, par (nom, taille en points) : au plus une par
+ // bouton et par taille (deux pour le mode de la caméra).
+ static UIImage *icon_image(NSString *symbol, CGFloat point_size) {
+-    static struct { NSString *symbol; CGFloat size; UIImage *image; } cache[20];
++    static struct { NSString *symbol; CGFloat size; UIImage *image; } cache[64];   // hl2ios : 20 -> 64 (boutons créés)
+     static int count;
+     for (int i = 0; i < count; ++i)
+         if (cache[i].size == point_size && [cache[i].symbol isEqualToString:symbol]) return cache[i].image;
+     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:point_size
+                                                                                          weight:UIImageSymbolWeightBold];
+-    UIImage *tinted = [[UIImage systemImageNamed:symbol withConfiguration:config]
+-                       imageWithTintColor:icon_tint renderingMode:UIImageRenderingModeAlwaysOriginal];
++    UIImage *named = [UIImage systemImageNamed:symbol withConfiguration:config];
++    // hl2ios : nom inconnu (fichier édité à la main) : point d'interrogation plutôt qu'une image vide.
++    if (!named) named = [UIImage systemImageNamed:@"questionmark" withConfiguration:config];
++    UIImage *tinted = [named imageWithTintColor:icon_tint renderingMode:UIImageRenderingModeAlwaysOriginal];
+     // Rendue une fois en bitmap à l'échelle de l'écran : le CGImage d'une icône
+     // SF Symbols n'a pas sa teinte, et c'est lui que prend le calque.
+     UIImage *image = render_bitmap(tinted.size, ^(CGContextRef c) {
+@@ -604,8 +620,21 @@
+         // Mode de la caméra : l'icône montre le mode actuel.
+         NSString *symbol = t->action == RT_TOUCH_LOOK_MODE ? (trackpad ? @"hand.draw.fill" : @"r.joystick.fill")
+                          : t->symbol ? @(t->symbol) : nil;
++        // hl2ios : cadenas sur le tir, le tir secondaire et la recharge tant que l'arme est rangée.
++        if ((t->action == RT_TOUCH_FIRE || t->action == RT_TOUCH_ALT_FIRE || t->action == RT_TOUCH_RELOAD) &&
++            hl2ios_jogo_bloqueia_tiro()) symbol = @"lock.fill";
+         b[n++] = (Button){t->action, symbol, color, CGPointMake(cx, cy), size, flags};
+     }
++    // hl2ios : boutons créés dans l'éditeur ; « ranger l'arme » allumé tant que l'arme est rangée.
++    for (int i = 0, created = hl2ios_toque_personalizados(); i < created && n < MAX_BUTTONS; ++i) {
++        double cx = 0, cy = 0; float size = 54, rgba[4]; unsigned flags = 0; const char *symbol = NULL; int holster = 0;
++        int action = hl2ios_toque_personalizado(i, CGRectGetMinX(a), CGRectGetMinY(a), a.size.width, a.size.height,
++                                                &cx, &cy, &size, &flags, &symbol, rgba, &holster);
++        if (action < RT_TOUCH_CUSTOM || action > RT_TOUCH_CUSTOM_LAST) continue;
++        UIColor *color = [UIColor colorWithRed:rgba[0] green:rgba[1] blue:rgba[2]
++                                         alpha:holster && hl2ios_jogo_guardada() ? .9 : rgba[3]];
++        b[n++] = (Button){(Action)action, symbol ? @(symbol) : nil, color, CGPointMake(cx, cy), size, flags};
++    }
+     return n;
+ }
+ - (void)invalidateLayout { layoutValid = NO; [self setNeedsRender]; }

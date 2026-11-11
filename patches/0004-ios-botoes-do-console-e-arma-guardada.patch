@@ -1,0 +1,21 @@
+diff --git a/runtime/ios/game_state.c b/runtime/ios/game_state.c
+index 7bd1fc0..5012e84 100644
+--- a/runtime/ios/game_state.c
++++ b/runtime/ios/game_state.c
+@@ -196,7 +196,16 @@ static void autoexec(CPU *c) {
+     if (!next) done = 1;
+ }
+ 
++// hl2ios : botões do console e arma guardada (runtime/ios/hl2ios_jogo.c, do repositório
++// hl2ios). Mesmo ICvar e mesma chamada direta de comandos que acima.
++#include "hl2ios_jogo.h"
++uint32_t rt_ios_find_convar(CPU *c, const char *name) { return find_convar(c, name); }
++const char *rt_ios_convar_string(uint32_t convar) { return convar_string(convar); }
++int rt_ios_set_convar(CPU *c, uint32_t convar, const char *value) { return set_convar(c, convar, value); }
++void rt_ios_run_console_command(CPU *c, const char *line) { run_console_command(c, line); }
++
+ void rt_ios_game_state_poll(void) {
++    hl2ios_jogo_poll();   // a cada chamada : a fila dos botões não espera os 100 ms
+     uint64_t now = SDL_GetTicks64();
+     if (now < next_query) return;
+     next_query = now + 100;

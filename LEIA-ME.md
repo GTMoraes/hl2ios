@@ -67,6 +67,11 @@ O projeto foi feito para um Mac com o iPhone no cabo. Aqui não há Mac, então:
 6. **Editor dos controles** (`patches/0003` e `extras/hl2ios_toque.m`): dois botões novos na tabela
    (pulo agachado e a engrenagem do editor), e a camada de toque passa a aplicar os ajustes salvos.
    Detalhes na seção "Editor dos controles".
+7. **Botões de comando e arma guardada** (`patches/0004` e `0005`, `extras/hl2ios_jogo.c`): botões
+   criados no editor rodam comandos do console, e o botão de guardar a arma trava o tiro enquanto
+   ela está guardada. Detalhes em "Botões criados" e "Guardar arma".
+8. **Sair sem falha** (`patches/0006`, `extras/hl2ios_sair.m`): ao sair pelo menu do jogo, o app vai
+   para o fundo com a animação do sistema e só depois fecha.
 
 O binário de Mac que vem esquecido no depot (`bin/ffmpegsumo.so`) é tirado do app: binário Mach-O
 solto é recusado no envio, e o jogo não usa esse arquivo.
@@ -166,7 +171,47 @@ direita mexe a câmera. Ela não muda no editor.
 equivalente no Half-Life 2 ao pulo longo dos outros jogos. Se o agachar alternado estiver ligado,
 ele continua agachado depois.
 
-Os ajustes ficam em `hl2-toque.json`, na pasta do app no Arquivos, e a versão anterior em
+### Botões criados
+
+**Novo botão** (no painel) cria um botão a mais, até 24. Ele aparece no alto, no meio da tela, e
+abre a folha dele:
+
+- **Modelo:** Guardar arma, Arma 1 a Arma 6 (`slot1` a `slot6`), Última arma (`lastinv`, o Q do PC)
+  ou Comando.
+- **Comando:** o que vai no console do jogo, digitado no campo. Vários separados por `;`. Os que
+  começam com `+` (como `+attack2` ou `+jump; +duck`) ficam apertados enquanto o dedo segura e são
+  soltos (`-attack2`, `-jump;-duck`) quando ele sai; com **Alternar** ligado, um toque aperta e o
+  outro solta. Comandos que pedem `sv_cheats` continuam pedindo.
+- **Cor e ícone:** escolhidos na folha. **Pronto** fecha a folha.
+
+Com o botão criado escolhido, o painel tem Tamanho, **Editar** (abre a folha de novo), **Apagar**
+(pergunta antes) e Mira ao arrastar. Nada é gravado antes de Concluir; Restaurar tudo apaga os
+botões criados (e pergunta antes).
+
+Com `hud_fastswitch 0` (o padrão do jogo), Arma 1 a 6 abrem a seleção na tela e o tiro confirma,
+como no PC. Para trocar na hora, ligue a troca rápida de armas nas opções do jogo (Teclado ›
+Avançado) ou use um botão de Comando com `hud_fastswitch 1`.
+
+### Guardar arma
+
+O botão do modelo Guardar arma guarda a arma com a animação (o `impulse 200` do jogo) e saca de
+novo no toque seguinte. Com a arma guardada:
+
+- o tiro, o tiro secundário e o recarregar mostram um cadeado e não disparam; tocar num deles
+  saca a arma, sem atirar;
+- o botão fica aceso;
+- o app lê do próprio jogo a arma na mão e se ela está escondida. Quando o jogo saca a arma
+  sozinho (arma nova pega, objeto solto depois do Usar, troca de arma, veículo), os botões voltam
+  ao normal na hora;
+- num save feito com a arma guardada, ela continua guardada ao carregar, e o cadeado volta junto.
+
+O `impulse 200` só vale com `sv_cheats 1`. O app liga o `sv_cheats` só pelo instante em que o jogo
+processa o comando e volta a 0 em seguida (se já estava em 1, não mexe). O registro mostra tudo
+nas linhas `[hl2ios] arma:`.
+
+### Arquivo dos ajustes
+
+Os ajustes e os botões criados ficam em `hl2-toque.json`, na pasta do app no Arquivos, e a versão anterior em
 `hl2-toque-anterior.json`. Para começar do zero fora do editor, apague o `hl2-toque.json` com o app
 fechado. O registro (`game.log`) mostra o que foi lido e gravado, nas linhas `[hl2ios] toque:`.
 
@@ -194,6 +239,14 @@ linha com "target not recompiled" e o endereço.
 - **Editor numa janela própria:** o laço do SDL não deixa o UIKit desenhar sozinho, então o editor
   força cada desenho (como a camada de toque do projeto faz). Se ele abrir sem responder ou sem
   atualizar a tela, é aqui.
+- **Teclado do campo de comando:** o editor pega o foco do SDL enquanto o campo está em uso e o
+  devolve depois. Se o teclado não abrir, ou o jogo não responder a teclas depois de fechar o
+  editor, é aqui.
+- **Leitura da arma:** os endereços vêm das tabelas de rede do próprio jogo; se a busca falhar, o
+  app usa os que achei no `client.so` do depot 224. Se nada conferir, o botão ainda guarda e saca,
+  mas o tiro não trava (o registro diz "leitura não confere").
+- **Controle ou teclado físico** não passam pela trava do tiro.
+- **Sair:** o app usa a mesma chamada do `hlios` para ir ao fundo (`suspend`, não pública).
 
 ## Atualizar
 

@@ -1,8 +1,8 @@
 // hl2ios: editor e ajustes dos controles de toque (hl2ios_toque.m).
 //
 // Arquivo do repositório hl2ios, copiado para runtime/ios/ do source-recomp antes do build
-// (scripts/baixar-recomp.sh). Os ajustes ficam em Documents/hl2-toque.json, visível no app
-// Arquivos; a cópia anterior fica em Documents/hl2-toque-anterior.json.
+// (scripts/baixar-recomp.sh). Os ajustes e os botões criados ficam em Documents/hl2-toque.json,
+// visível no app Arquivos; a cópia anterior fica em Documents/hl2-toque-anterior.json.
 #pragma once
 #include "touch_layout.h"
 
@@ -22,3 +22,17 @@ float hl2ios_toque_escala_sticks(void);
 // Abre o editor por cima do jogo (thread principal). `fechou` roda quando ele fecha, com 1 se
 // os ajustes mudaram e foram gravados.
 void hl2ios_toque_editor_abrir(void (^fechou)(int salvou));
+
+// ---- botões criados no editor (até 24: ações RT_TOUCH_CUSTOM a RT_TOUCH_CUSTOM_LAST) ----
+
+// Quantos botões criados existem.
+int hl2ios_toque_personalizados(void);
+
+// Botão criado número i dentro da zona segura (x, y, w, h): centro, tamanho, opções (alternar e
+// mirar), ícone SF Symbols, cor (r, g, b, a) e 1 em `guardar` se ele guarda a arma. Devolve a
+// ação (RT_TOUCH_CUSTOM + i), ou -1 se o botão não existe.
+int hl2ios_toque_personalizado(int i, double x, double y, double w, double h, double *cx, double *cy,
+                               float *tamanho, unsigned *flags, const char **simbolo, float rgba[4], int *guardar);
+
+// O dedo apertou (1) ou soltou (0) o botão criado número i: roda o que ele faz.
+void hl2ios_toque_executar(int i, int apertou);

@@ -8,7 +8,11 @@
 //
 // O editor abre pelo botão de engrenagem, por cima do menu de pausa, numa janela própria acima
 // da do jogo: arrastar move um botão, a pinça muda o tamanho, e o painel tem o resto. Nada é
-// gravado antes de Concluir; Cancelar e Restaurar tudo perguntam antes.
+// gravado antes de Concluir; Cancelar, Restaurar tudo e Apagar perguntam antes.
+//
+// Novo botão cria um botão a mais (até 24), a partir de um modelo (guardar a arma, arma 1 a 6,
+// última arma) ou de um comando do console digitado, com ícone e cor escolhidos. O que ele faz
+// roda em hl2ios_jogo.c.
 //
 // A janela não vira a principal (o SDL continua com o foco), e o laço de eventos do SDL não
 // deixa o UIKit desenhar sozinho: como o touch_controls.m, o editor termina cada mudança com
@@ -19,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "game_ios.h"
+#include "hl2ios_jogo.h"
 #include "hl2ios_toque.h"
 
 // Arquivo fora do source-recomp: avisos de API antiga ou de parâmetro sem uso não podem parar
@@ -60,6 +65,59 @@ static const Info *info_de(rt_touch_action acao) {
     return NULL;
 }
 
+// ---- botões criados: modelos, cores e ícones ----
+
+enum { TIPO_COMANDO, TIPO_GUARDAR, TIPO_ARMA };
+typedef struct {
+    const char *chave, *nome;
+    const char *comando;   // TIPO_ARMA: o comando do jogo
+    const char *icone;     // ícone ao escolher o modelo
+    int tipo;
+} Modelo;
+static const Modelo kModelos[] = {
+    {"guardar", "Guardar arma", NULL, "hand.raised.fill", TIPO_GUARDAR},
+    {"arma1", "Arma 1", "slot1", "1.circle", TIPO_ARMA},
+    {"arma2", "Arma 2", "slot2", "2.circle", TIPO_ARMA},
+    {"arma3", "Arma 3", "slot3", "3.circle", TIPO_ARMA},
+    {"arma4", "Arma 4", "slot4", "4.circle", TIPO_ARMA},
+    {"arma5", "Arma 5", "slot5", "5.circle", TIPO_ARMA},
+    {"arma6", "Arma 6", "slot6", "6.circle", TIPO_ARMA},
+    {"ultima-arma", "Última arma", "lastinv", "arrow.left.arrow.right", TIPO_ARMA},
+    {"comando", "Comando", NULL, "terminal.fill", TIPO_COMANDO},
+};
+enum { N_MODELOS = (int)(sizeof(kModelos) / sizeof(*kModelos)), MODELO_COMANDO = N_MODELOS - 1 };
+
+// As quatro primeiras são as do touch_controls.m (palette_init).
+static const struct { const char *chave; float r, g, b, a; } kCores[] = {
+    {"escuro", 0, 0, 0, .35f},       {"azul", .16f, .55f, 1, .6f},   {"laranja", 1, .55f, .05f, .6f},
+    {"vermelho", .75f, .12f, .08f, .45f}, {"verde", .14f, .62f, .24f, .55f}, {"roxo", .55f, .25f, .85f, .55f},
+    {"amarelo", .95f, .8f, .1f, .55f}, {"branco", 1, 1, 1, .35f},
+};
+enum { N_CORES = (int)(sizeof(kCores) / sizeof(*kCores)) };
+
+static const char *const kIcones[] = {
+    "hand.raised.fill", "1.circle", "2.circle", "3.circle", "4.circle", "5.circle", "6.circle",
+    "arrow.left.arrow.right", "terminal.fill", "scope", "target", "flame.fill", "bolt.fill", "burst.fill",
+    "shield.fill", "cross.case.fill", "heart.fill", "star.fill", "eye.fill", "binoculars.fill",
+    "magnifyingglass", "lightbulb.fill", "flag.fill", "bell.fill", "figure.walk", "figure.run",
+    "arrow.up", "arrow.down", "arrow.clockwise", "car.fill", "hammer.fill", "wrench.fill",
+    "speaker.wave.2.fill", "camera.fill", "map.fill", "gamecontroller.fill", "plus", "minus",
+    "xmark", "questionmark", "circle.fill", "square.fill", "triangle.fill",
+};
+enum { N_ICONES = (int)(sizeof(kIcones) / sizeof(*kIcones)) };
+
+enum { MAX_PERS = RT_TOUCH_CUSTOM_LAST - RT_TOUCH_CUSTOM + 1, COMANDO = 256, ICONE = 48 };
+typedef struct {
+    int modelo, cor;        // índices em kModelos e kCores
+    char comando[COMANDO];  // TIPO_COMANDO: a linha do console
+    char icone[ICONE];      // nome SF Symbols
+    double fx, fy;          // centro, em fração da zona segura
+    float tamanho;          // diâmetro em pontos
+    int alternar, mirar;    // 0 ou 1 (alternar só vale para comando)
+} Pers;
+
+static const float kTamanhoPers = 54;
+
 // ---- ajustes ----
 
 static const float kTamanhoMin = 28, kTamanhoMax = 140;
@@ -75,6 +133,8 @@ typedef struct {
 typedef struct {
     Ajuste botao[RT_TOUCH_ACTION_COUNT];
     float opacidade, sticks;
+    Pers pers[MAX_PERS];   // botões criados, na ordem em que foram criados
+    int nPers;
 } Ajustes;
 
 static void ajuste_padrao(Ajuste *j) {
@@ -94,6 +154,13 @@ static int ajustes_iguais(const Ajustes *a, const Ajustes *b) {
         if (x->posicao != y->posicao || x->tamanho != y->tamanho || x->oculto != y->oculto ||
             x->alternar != y->alternar || x->mirar != y->mirar) return 0;
         if (x->posicao && (x->fx != y->fx || x->fy != y->fy)) return 0;
+    }
+    if (a->nPers != b->nPers) return 0;
+    for (int i = 0; i < a->nPers; ++i) {
+        const Pers *x = &a->pers[i], *y = &b->pers[i];
+        if (x->modelo != y->modelo || x->cor != y->cor || strcmp(x->comando, y->comando) || strcmp(x->icone, y->icone) ||
+            x->fx != y->fx || x->fy != y->fy || x->tamanho != y->tamanho || x->alternar != y->alternar ||
+            x->mirar != y->mirar) return 0;
     }
     return 1;
 }
@@ -126,6 +193,27 @@ static int aplicar(const Ajustes *a, rt_touch_action acao, int ocultar, double x
     if ((pode & PODE_MIRAR) && j->mirar >= 0)
         *flags = j->mirar ? (*flags | (unsigned)RT_TOUCH_AIM) : (*flags & ~(unsigned)RT_TOUCH_AIM);
     return 1;
+}
+
+// O mesmo para um botão criado.
+static void aplicar_pers(const Pers *p, double x, double y, double w, double h, double *cx, double *cy,
+                         float *tamanho, unsigned *flags) {
+    *tamanho = p->tamanho > 0 ? p->tamanho : kTamanhoPers;
+    double r = *tamanho / 2.0;
+    *cx = limitar(x + w * p->fx, x + r, x + w - r);
+    *cy = limitar(y + h * p->fy, y + r, y + h - r);
+    *flags = 0;
+    if (p->alternar && kModelos[p->modelo].tipo == TIPO_COMANDO) *flags |= RT_TOUCH_TOGGLE;
+    if (p->mirar) *flags |= RT_TOUCH_AIM;
+}
+
+static void pers_novo(Pers *p, int modelo) {
+    memset(p, 0, sizeof(*p));
+    p->modelo = modelo;
+    snprintf(p->icone, sizeof(p->icone), "%s", kModelos[modelo].icone);
+    p->fx = .5;
+    p->fy = .3;
+    p->tamanho = kTamanhoPers;
 }
 
 // ---- arquivo (Documents/hl2-toque.json) ----
@@ -182,8 +270,39 @@ static void carregar(void) {
             ++lidos;
         }
     }
-    fprintf(stderr, "[hl2ios] toque: hl2-toque.json com %d botões ajustados, opacidade %.2f, sticks %.2f\n",
-            lidos, salvos.opacidade, salvos.sticks);
+    NSArray *criados = raiz[@"personalizados"];
+    if ([criados isKindOfClass:NSArray.class]) {
+        for (id item in criados) {
+            if (salvos.nPers == MAX_PERS || ![item isKindOfClass:NSDictionary.class]) continue;
+            NSDictionary *d = item;
+            int modelo = -1, cor = 0;
+            for (int m = 0; m < N_MODELOS; ++m)
+                if ([d[@"modelo"] isEqual:@(kModelos[m].chave)]) modelo = m;
+            if (modelo < 0) continue;   // modelo de uma versão mais nova: deixado de fora
+            for (int k = 0; k < N_CORES; ++k)
+                if ([d[@"cor"] isEqual:@(kCores[k].chave)]) cor = k;
+            Pers *p = &salvos.pers[salvos.nPers++];
+            pers_novo(p, modelo);
+            p->cor = cor;
+            if ([d[@"comando"] isKindOfClass:NSString.class])
+                snprintf(p->comando, sizeof(p->comando), "%s", [(NSString *)d[@"comando"] UTF8String]);
+            if ([d[@"icone"] isKindOfClass:NSString.class] && [(NSString *)d[@"icone"] length])
+                snprintf(p->icone, sizeof(p->icone), "%s", [(NSString *)d[@"icone"] UTF8String]);
+            p->fx = numero(d[@"x"], .5, 0, 1);
+            p->fy = numero(d[@"y"], .3, 0, 1);
+            p->tamanho = (float)numero(d[@"tamanho"], kTamanhoPers, kTamanhoMin, kTamanhoMax);
+            p->alternar = sim_nao(d[@"alternar"], 0);
+            p->mirar = sim_nao(d[@"mirar"], 0);
+        }
+    }
+    fprintf(stderr, "[hl2ios] toque: hl2-toque.json com %d botões ajustados e %d criados, opacidade %.2f, sticks %.2f\n",
+            lidos, salvos.nPers, salvos.opacidade, salvos.sticks);
+}
+
+// Texto em UTF-8 para NSString; "" se não for UTF-8 válido (nunca nil num dicionário).
+static NSString *texto(const char *c) {
+    NSString *t = c ? [NSString stringWithUTF8String:c] : nil;
+    return t ?: @"";
 }
 
 static double arredondar(double v, double passo) {
@@ -206,11 +325,28 @@ static BOOL gravar(const Ajustes *a) {
         if (j->mirar >= 0) b[@"mirar"] = j->mirar ? @YES : @NO;
         if (b.count) botoes[@(kInfo[i].chave)] = b;
     }
+    NSMutableArray *criados = [NSMutableArray array];
+    for (int i = 0; i < a->nPers; ++i) {
+        const Pers *p = &a->pers[i];
+        NSMutableDictionary *d = [@{
+            @"modelo": @(kModelos[p->modelo].chave),
+            @"icone": texto(p->icone),
+            @"cor": @(kCores[p->cor].chave),
+            @"x": @(arredondar(p->fx, .0001)),
+            @"y": @(arredondar(p->fy, .0001)),
+            @"tamanho": @(arredondar(p->tamanho, .1)),
+        } mutableCopy];
+        if (kModelos[p->modelo].tipo == TIPO_COMANDO) d[@"comando"] = texto(p->comando);
+        if (p->alternar) d[@"alternar"] = @YES;
+        if (p->mirar) d[@"mirar"] = @YES;
+        [criados addObject:d];
+    }
     NSDictionary *raiz = @{
-        @"versao": @1,
+        @"versao": @2,
         @"opacidade": @(arredondar(a->opacidade, .01)),
         @"sticks": @(arredondar(a->sticks, .01)),
         @"botoes": botoes,
+        @"personalizados": criados,
     };
     NSData *dados = [NSJSONSerialization dataWithJSONObject:raiz
                                                     options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys
@@ -222,8 +358,8 @@ static BOOL gravar(const Ajustes *a) {
         [fm copyItemAtPath:arquivo toPath:anterior error:NULL];
     }
     BOOL ok = dados && [dados writeToFile:arquivo atomically:YES];
-    fprintf(stderr, "[hl2ios] toque: %s hl2-toque.json (%lu botões ajustados)\n", ok ? "gravado" : "NÃO consegui gravar",
-            (unsigned long)botoes.count);
+    fprintf(stderr, "[hl2ios] toque: %s hl2-toque.json (%lu botões ajustados, %d criados)\n",
+            ok ? "gravado" : "NÃO consegui gravar", (unsigned long)botoes.count, a->nPers);
     return ok;
 }
 
@@ -245,9 +381,84 @@ float hl2ios_toque_escala_sticks(void) {
     return salvos.sticks;
 }
 
+int hl2ios_toque_personalizados(void) {
+    carregar();
+    return salvos.nPers;
+}
+
+int hl2ios_toque_personalizado(int i, double x, double y, double w, double h, double *cx, double *cy,
+                               float *tamanho, unsigned *flags, const char **simbolo, float rgba[4], int *guardar) {
+    carregar();
+    if (i < 0 || i >= salvos.nPers) return -1;
+    const Pers *p = &salvos.pers[i];
+    aplicar_pers(p, x, y, w, h, cx, cy, tamanho, flags);
+    *simbolo = p->icone[0] ? p->icone : kModelos[p->modelo].icone;
+    rgba[0] = kCores[p->cor].r;
+    rgba[1] = kCores[p->cor].g;
+    rgba[2] = kCores[p->cor].b;
+    rgba[3] = kCores[p->cor].a;
+    *guardar = kModelos[p->modelo].tipo == TIPO_GUARDAR;
+    return RT_TOUCH_CUSTOM + i;
+}
+
+// Para soltar um comando: "-x" para cada parte que começa com "+x" ("+jump; +duck" vira
+// "-jump;-duck"). Devolve 0 se não há nada a soltar.
+static int soltura(const char *linha, char *saida, size_t tamanho) {
+    size_t n = 0;
+    saida[0] = 0;
+    for (const char *p = linha; *p;) {
+        while (*p == ' ' || *p == ';') ++p;
+        if (*p == '+') {
+            const char *fim = p + 1;
+            while (*fim && *fim != ' ' && *fim != ';') ++fim;
+            if (fim > p + 1 && n + (size_t)(fim - p) + 2 < tamanho) {
+                n += (size_t)snprintf(saida + n, tamanho - n, "%s-%.*s", n ? ";" : "", (int)(fim - p - 1), p + 1);
+            }
+        }
+        while (*p && *p != ';') ++p;
+    }
+    return n > 0;
+}
+
+void hl2ios_toque_executar(int i, int apertou) {
+    carregar();
+    if (i < 0 || i >= salvos.nPers) return;
+    const Pers *p = &salvos.pers[i];
+    const Modelo *m = &kModelos[p->modelo];
+    if (m->tipo == TIPO_GUARDAR) {
+        if (apertou) hl2ios_jogo_guardar();
+    } else if (m->tipo == TIPO_ARMA) {
+        if (apertou) {
+            hl2ios_jogo_selecao();
+            hl2ios_jogo_comando(m->comando);
+        }
+    } else if (apertou) {
+        hl2ios_jogo_comando(p->comando);
+    } else {
+        char solta[COMANDO];
+        if (soltura(p->comando, solta, sizeof(solta))) hl2ios_jogo_comando(solta);
+    }
+}
+
 // ---- editor ----
 
 static void editor_fechar(int salvou);
+static UIWindow *janela;
+
+// O campo do comando só recebe o teclado na janela principal: o editor a pega enquanto o campo
+// está em uso e a devolve (à do SDL) quando ele termina ou o editor fecha.
+static UIWindow *chave_anterior;
+static void pegar_chave(void) {
+    if (!janela || janela.isKeyWindow) return;
+    for (UIWindow *w in UIApplication.sharedApplication.windows)
+        if (w.isKeyWindow) chave_anterior = w;
+    [janela makeKeyWindow];
+}
+static void devolver_chave(void) {
+    UIWindow *w = chave_anterior;
+    chave_anterior = nil;
+    if (w) [w makeKeyWindow];
+}
 
 static UIColor *laranja(void) {
     return [UIColor colorWithRed:.98 green:.55 blue:.05 alpha:1];
@@ -262,22 +473,35 @@ static UIColor *cor_de(rt_touch_color c) {
     }
 }
 
+static UIColor *cor_pers(int cor) {
+    return [UIColor colorWithRed:kCores[cor].r green:kCores[cor].g blue:kCores[cor].b alpha:kCores[cor].a];
+}
+static NSString *nome_pers(const Pers *p) {
+    if (kModelos[p->modelo].tipo != TIPO_COMANDO || !p->comando[0]) return @(kModelos[p->modelo].nome);
+    NSString *t = texto(p->comando);
+    if (t.length <= 22) return t;
+    return [[t substringWithRange:[t rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, 21)]] stringByAppendingString:@"…"];
+}
+
 // Um botão no editor: o círculo com o ícone, e o nome embaixo.
 @interface HL2EdBotao : UIView
 @property (nonatomic) rt_touch_action acao;
 @property (nonatomic) int indice;   // posição na tabela de touch_layout.c
+@property (nonatomic) int pers;     // botão criado: índice em Ajustes.pers (-1: da tabela)
 @property (nonatomic) float tamanho;
 @property (nonatomic, copy) NSString *simbolo;
 @property (nonatomic, strong) UIImageView *icone;
 @property (nonatomic, strong) UILabel *rotulo;
 - (instancetype)initWithAcao:(rt_touch_action)acao simbolo:(NSString *)simbolo cor:(UIColor *)cor;
 - (void)mostrarEm:(CGPoint)centro tamanho:(float)tamanho;
+- (void)trocarSimbolo:(NSString *)simbolo;
 @end
 
 @implementation HL2EdBotao
 - (instancetype)initWithAcao:(rt_touch_action)acao simbolo:(NSString *)simbolo cor:(UIColor *)cor {
     if ((self = [super initWithFrame:CGRectZero])) {
         _acao = acao;
+        _pers = -1;
         _simbolo = [simbolo copy];
         self.backgroundColor = cor;
         self.layer.borderWidth = 2;
@@ -312,12 +536,17 @@ static UIColor *cor_de(rt_touch_color c) {
     _icone.frame = self.bounds;
     _rotulo.frame = CGRectMake(-50, tamanho + 1, tamanho + 100, 13);
 }
+- (void)trocarSimbolo:(NSString *)simbolo {
+    _simbolo = [simbolo copy];
+    _icone.image = nil;   // refeito no próximo mostrarEm
+}
 @end
 
 typedef void (^HL2EdAcao)(void);
 
-// A tela do editor: os botões, a divisa dos sticks, o painel e a confirmação.
-@interface HL2EdTela : UIView
+// A tela do editor: os botões, a divisa dos sticks, o painel, a folha do botão criado e a
+// confirmação.
+@interface HL2EdTela : UIView <UITextFieldDelegate>
 @end
 
 @implementation HL2EdTela {
@@ -337,6 +566,14 @@ typedef void (^HL2EdAcao)(void);
     UISlider *sTamanho, *sOpacidade, *sSticks;
     UISwitch *swAlternar, *swMirar;
     UIButton *bOcultar, *bPadraoDeste, *bRestaurar, *bMoverPainel, *bCancelar, *bConcluir;
+    int nFixos;                     // botões da tabela no começo de `botoes`; depois, os criados
+    UIButton *bNovo, *bEditar, *bApagar;
+    UIView *folha, *folhaCaixa;     // folha do botão criado: modelo, comando, cor e ícone
+    UILabel *folhaTitulo, *campoDica, *rCor;
+    UIScrollView *folhaModelos, *folhaIcones;
+    NSMutableArray<UIButton *> *bModelos, *bIcones, *bCores;
+    UITextField *campo;
+    UIButton *bPronto;
     UIView *confirma, *caixa;
     UILabel *confirmaTexto;
     UIButton *confirmaSim, *confirmaNao;
@@ -380,7 +617,10 @@ typedef void (^HL2EdAcao)(void);
             [botoes addObject:b];
             [self addSubview:b];
         }
+        nFixos = (int)botoes.count;
+        [self recriarPersonalizados];
         [self montarPainel];
+        [self montarFolha];
         [self montarConfirmacao];
         UIPinchGestureRecognizer *pinca = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(pinca:)];
         [self addGestureRecognizer:pinca];
@@ -447,6 +687,9 @@ typedef void (^HL2EdAcao)(void);
     swAlternar = [self chave:@selector(mudouAlternar:)];
     rMirar = [self rotulo:@"Mira ao arrastar" tamanho:13 peso:UIFontWeightRegular em:painel];
     swMirar = [self chave:@selector(mudouMirar:)];
+    bEditar = [self botao:@"Editar" acao:@selector(tocouEditar) destaque:NO em:painel];
+    bApagar = [self botao:@"Apagar" acao:@selector(tocouApagar) destaque:NO em:painel];
+    bApagar.backgroundColor = [UIColor colorWithRed:.6 green:.12 blue:.08 alpha:1];
     // linha 1, sem botão escolhido
     dica = [self rotulo:@"Toque num botão para ajustá-lo. Arraste para mover, pince para o tamanho."
                 tamanho:12 peso:UIFontWeightRegular em:painel];
@@ -456,6 +699,7 @@ typedef void (^HL2EdAcao)(void);
     rSticks = [self rotulo:@"Sticks" tamanho:13 peso:UIFontWeightRegular em:painel];
     sSticks = [self deslizador:kSticksMin max:kSticksMax acao:@selector(mudouSticks:)];
     // linha 2
+    bNovo = [self botao:@"Novo botão" acao:@selector(tocouNovo) destaque:NO em:painel];
     bPadraoDeste = [self botao:@"Padrão deste" acao:@selector(tocouPadraoDeste) destaque:NO em:painel];
     bRestaurar = [self botao:@"Restaurar tudo" acao:@selector(tocouRestaurar) destaque:NO em:painel];
     bMoverPainel = [self botao:@"Painel embaixo" acao:@selector(tocouMoverPainel) destaque:NO em:painel];
@@ -479,6 +723,236 @@ typedef void (^HL2EdAcao)(void);
     confirmaSim.backgroundColor = [UIColor colorWithRed:.75 green:.15 blue:.1 alpha:1];
 }
 
+// Botões criados: vistas refeitas a partir de trabalho.pers (depois de criar, apagar ou
+// restaurar).
+- (void)recriarPersonalizados {
+    while ((int)botoes.count > nFixos) {
+        [botoes.lastObject removeFromSuperview];
+        [botoes removeLastObject];
+    }
+    for (int i = 0; i < trabalho.nPers; ++i) {
+        const Pers *p = &trabalho.pers[i];
+        HL2EdBotao *b = [[HL2EdBotao alloc] initWithAcao:(rt_touch_action)(RT_TOUCH_CUSTOM + i)
+                                                 simbolo:texto(p->icone)
+                                                     cor:cor_pers(p->cor)];
+        b.pers = i;
+        [botoes addObject:b];
+        if (painel) [self insertSubview:b belowSubview:painel];
+        else [self addSubview:b];
+    }
+    if (selecionado >= (int)botoes.count) selecionado = -1;
+}
+
+// ---- folha do botão criado ----
+- (UIButton *)escolha:(NSString *)titulo imagem:(UIImage *)imagem acao:(SEL)acao tag:(NSInteger)tag em:(UIView *)pai {
+    UIButton *b = [self botao:titulo ?: @"" acao:acao destaque:NO em:pai];
+    b.tag = tag;
+    if (imagem) {
+        [b setImage:imagem forState:UIControlStateNormal];
+        b.tintColor = UIColor.whiteColor;
+    }
+    b.layer.borderColor = laranja().CGColor;
+    return b;
+}
+- (void)montarFolha {
+    folha = [[UIView alloc] init];
+    folha.backgroundColor = [UIColor colorWithWhite:0 alpha:.45];
+    folha.hidden = YES;
+    [self addSubview:folha];
+    folhaCaixa = [[UIView alloc] init];
+    folhaCaixa.backgroundColor = [UIColor colorWithWhite:.1 alpha:.97];
+    folhaCaixa.layer.cornerRadius = 14;
+    [folha addSubview:folhaCaixa];
+    folhaTitulo = [self rotulo:@"Botão criado" tamanho:15 peso:UIFontWeightBold em:folhaCaixa];
+    folhaTitulo.textColor = laranja();
+    folhaModelos = [[UIScrollView alloc] init];
+    folhaModelos.showsHorizontalScrollIndicator = NO;
+    [folhaCaixa addSubview:folhaModelos];
+    bModelos = [NSMutableArray array];
+    for (int m = 0; m < N_MODELOS; ++m)
+        [bModelos addObject:[self escolha:@(kModelos[m].nome) imagem:nil acao:@selector(tocouModelo:) tag:m em:folhaModelos]];
+    campo = [[UITextField alloc] init];
+    campo.delegate = self;
+    campo.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+    campo.textColor = UIColor.whiteColor;
+    campo.backgroundColor = [UIColor colorWithWhite:1 alpha:.12];
+    campo.layer.cornerRadius = 8;
+    campo.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 10, 10)];
+    campo.leftViewMode = UITextFieldViewModeAlways;
+    campo.attributedPlaceholder = [[NSAttributedString alloc]
+        initWithString:@"comando do console, ex.: +zoom"
+            attributes:@{NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:.35]}];
+    campo.autocorrectionType = UITextAutocorrectionTypeNo;
+    campo.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    campo.spellCheckingType = UITextSpellCheckingTypeNo;
+    campo.smartQuotesType = UITextSmartQuotesTypeNo;
+    campo.smartDashesType = UITextSmartDashesTypeNo;
+    campo.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
+    campo.keyboardType = UIKeyboardTypeASCIICapable;
+    campo.keyboardAppearance = UIKeyboardAppearanceDark;
+    campo.returnKeyType = UIReturnKeyDone;
+    campo.clearButtonMode = UITextFieldViewModeWhileEditing;
+    [campo addTarget:self action:@selector(mudouCampo) forControlEvents:UIControlEventEditingChanged];
+    [folhaCaixa addSubview:campo];
+    bPronto = [self botao:@"Pronto" acao:@selector(tocouPronto) destaque:YES em:folhaCaixa];
+    campoDica = [self rotulo:@"" tamanho:11 peso:UIFontWeightRegular em:folhaCaixa];
+    campoDica.textColor = [UIColor colorWithWhite:1 alpha:.6];
+    rCor = [self rotulo:@"Cor" tamanho:13 peso:UIFontWeightRegular em:folhaCaixa];
+    bCores = [NSMutableArray array];
+    for (int k = 0; k < N_CORES; ++k) {
+        UIButton *b = [self escolha:nil imagem:nil acao:@selector(tocouCor:) tag:k em:folhaCaixa];
+        b.backgroundColor = [cor_pers(k) colorWithAlphaComponent:MAX(.5, kCores[k].a + .25)];
+        b.layer.borderColor = UIColor.whiteColor.CGColor;
+        [bCores addObject:b];
+    }
+    folhaIcones = [[UIScrollView alloc] init];
+    folhaIcones.indicatorStyle = UIScrollViewIndicatorStyleWhite;
+    [folhaCaixa addSubview:folhaIcones];
+    bIcones = [NSMutableArray array];
+    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:17
+                                                                                         weight:UIImageSymbolWeightBold];
+    for (int i = 0; i < N_ICONES; ++i) {
+        UIImage *imagem = [UIImage systemImageNamed:@(kIcones[i]) withConfiguration:config];
+        [bIcones addObject:[self escolha:imagem ? nil : @"?" imagem:imagem acao:@selector(tocouIcone:) tag:i em:folhaIcones]];
+    }
+}
+- (void)disporFolha:(CGRect)a {
+    folha.frame = self.bounds;
+    // Presa no alto: com o teclado aberto, o modelo e o campo continuam à vista.
+    CGFloat w = MIN(a.size.width - 12, 660), h = MIN(a.size.height - 12, 330), m = 12;
+    folhaCaixa.frame = CGRectMake(CGRectGetMidX(a) - w / 2, CGRectGetMinY(a) + 6, w, h);
+    folhaTitulo.frame = CGRectMake(m, 8, w - 2 * m, 20);
+    folhaModelos.frame = CGRectMake(m, 34, w - 2 * m, 34);
+    CGFloat x = 0;
+    for (UIButton *b in bModelos) {
+        CGFloat bw = MAX(64, [b.titleLabel.text sizeWithAttributes:@{NSFontAttributeName: b.titleLabel.font}].width + 22);
+        b.frame = CGRectMake(x, 0, bw, 34);
+        x += bw + 8;
+    }
+    folhaModelos.contentSize = CGSizeMake(x - 8, 34);
+    campo.frame = CGRectMake(m, 76, w - 2 * m - 96, 34);
+    bPronto.frame = CGRectMake(w - m - 88, 76, 88, 34);
+    campoDica.frame = CGRectMake(m, 112, w - 2 * m, 16);
+    rCor.frame = CGRectMake(m, 134, 36, 30);
+    x = m + 40;
+    for (UIButton *b in bCores) {
+        b.frame = CGRectMake(x, 134, 30, 30);
+        b.layer.cornerRadius = 15;
+        x += 38;
+    }
+    CGFloat topo = 172;
+    folhaIcones.frame = CGRectMake(m, topo, w - 2 * m, MAX(46, h - topo - m));
+    int colunas = MAX(1, (int)((w - 2 * m + 6) / 46));
+    for (NSUInteger i = 0; i < bIcones.count; ++i)
+        bIcones[i].frame = CGRectMake((CGFloat)(i % (NSUInteger)colunas) * 46, (CGFloat)(i / (NSUInteger)colunas) * 46, 40, 40);
+    folhaIcones.contentSize = CGSizeMake(w - 2 * m, ((CGFloat)((bIcones.count + (NSUInteger)colunas - 1) / (NSUInteger)colunas)) * 46 - 6);
+}
+- (Pers *)persEscolhido {
+    HL2EdBotao *b = [self escolhido];
+    return b && b.pers >= 0 && b.pers < trabalho.nPers ? &trabalho.pers[b.pers] : NULL;
+}
+- (void)atualizarFolha {
+    Pers *p = [self persEscolhido];
+    if (!p) return;
+    int comando = kModelos[p->modelo].tipo == TIPO_COMANDO;
+    for (UIButton *b in bModelos) b.layer.borderWidth = b.tag == p->modelo ? 2 : 0;
+    for (UIButton *b in bCores) b.layer.borderWidth = b.tag == p->cor ? 3 : 0;
+    for (UIButton *b in bIcones) b.layer.borderWidth = !strcmp(kIcones[b.tag], p->icone) ? 2 : 0;
+    campo.enabled = comando;
+    campo.alpha = comando ? 1 : .5;
+    if (comando) {
+        if (!campo.isEditing) campo.text = texto(p->comando);
+        campoDica.text = @"Vários comandos: separe com ;. Os com + (ex.: +attack) ficam apertados enquanto você segura.";
+    } else {
+        if (campo.isEditing) [campo resignFirstResponder];
+        const Modelo *m = &kModelos[p->modelo];
+        campo.text = m->tipo == TIPO_GUARDAR ? @"impulse 200" : @(m->comando);
+        campoDica.text = m->tipo == TIPO_GUARDAR
+            ? @"Guarda e saca a arma. Guardada, o tiro fica travado; tocar no tiro saca a arma."
+            : @"Troca de arma. Com a arma guardada, também a saca.";
+    }
+}
+- (void)abrirFolha {
+    if (![self persEscolhido]) return;
+    arrasto = nil;
+    folha.hidden = NO;
+    [self atualizarFolha];
+    [self redesenhar];
+}
+- (void)aparenciaDoEscolhido {
+    HL2EdBotao *b = [self escolhido];
+    Pers *p = [self persEscolhido];
+    if (!b || !p) return;
+    b.backgroundColor = cor_pers(p->cor);
+    [b trocarSimbolo:texto(p->icone)];
+}
+- (void)tocouModelo:(UIButton *)botao {
+    Pers *p = [self persEscolhido];
+    if (!p || botao.tag < 0 || botao.tag >= N_MODELOS) return;
+    // O ícone acompanha o modelo enquanto for o do modelo anterior.
+    if (!strcmp(p->icone, kModelos[p->modelo].icone))
+        snprintf(p->icone, sizeof(p->icone), "%s", kModelos[botao.tag].icone);
+    p->modelo = (int)botao.tag;
+    [self aparenciaDoEscolhido];
+    [self atualizarFolha];
+    [self atualizarPainel];
+    [self redesenhar];
+    if (p->modelo == MODELO_COMANDO && !p->comando[0]) {
+        pegar_chave();
+        [campo becomeFirstResponder];
+    }
+}
+- (void)tocouCor:(UIButton *)botao {
+    Pers *p = [self persEscolhido];
+    if (!p || botao.tag < 0 || botao.tag >= N_CORES) return;
+    p->cor = (int)botao.tag;
+    [self aparenciaDoEscolhido];
+    [self atualizarFolha];
+    [self redesenhar];
+}
+- (void)tocouIcone:(UIButton *)botao {
+    Pers *p = [self persEscolhido];
+    if (!p || botao.tag < 0 || botao.tag >= N_ICONES) return;
+    snprintf(p->icone, sizeof(p->icone), "%s", kIcones[botao.tag]);
+    [self aparenciaDoEscolhido];
+    [self atualizarFolha];
+    [self redesenhar];
+}
+- (void)mudouCampo {
+    Pers *p = [self persEscolhido];
+    if (!p || kModelos[p->modelo].tipo != TIPO_COMANDO) return;
+    NSString *t = campo.text ?: @"";
+    // Cabe em COMANDO bytes, sem cortar um caractere ao meio.
+    while ([t lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >= COMANDO)
+        t = [t substringWithRange:[t rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, t.length - 1)]];
+    if (![t isEqualToString:campo.text]) campo.text = t;
+    snprintf(p->comando, sizeof(p->comando), "%s", t.UTF8String);
+    [self atualizarPainel];
+    [self redesenhar];
+}
+- (BOOL)textFieldShouldBeginEditing:(UITextField *)campoTocado {
+    (void)campoTocado;
+    pegar_chave();
+    return YES;
+}
+- (void)textFieldDidEndEditing:(UITextField *)campoTocado {
+    (void)campoTocado;
+    [self mudouCampo];
+    devolver_chave();
+    [self redesenhar];
+}
+- (BOOL)textFieldShouldReturn:(UITextField *)campoTocado {
+    [campoTocado resignFirstResponder];
+    return NO;
+}
+- (void)tocouPronto {
+    [campo resignFirstResponder];
+    devolver_chave();
+    folha.hidden = YES;
+    [self atualizarPainel];
+    [self redesenhar];
+}
+
 // ---- disposição ----
 - (CGRect)area {
     return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets);
@@ -498,6 +972,12 @@ typedef void (^HL2EdAcao)(void);
 // Centro e tamanho do botão com os ajustes em edição (ocultos também).
 - (CGPoint)centroDe:(HL2EdBotao *)b tamanho:(float *)tamanho {
     CGRect a = [self area];
+    if (b.pers >= 0) {
+        double cx, cy;
+        unsigned flags;
+        aplicar_pers(&trabalho.pers[b.pers], a.origin.x, a.origin.y, a.size.width, a.size.height, &cx, &cy, tamanho, &flags);
+        return CGPointMake(cx, cy);
+    }
     const rt_touch_button *t = &tabela[b.indice];
     double cx, cy;
     rt_touch_place(t, a.origin.x, a.origin.y, a.size.width, a.size.height, &cx, &cy);
@@ -536,17 +1016,19 @@ typedef void (^HL2EdAcao)(void);
         float tam;
         CGPoint centro = [self centroDe:b tamanho:&tam];
         [b mostrarEm:centro tamanho:tam];
-        BOOL oculto = trabalho.botao[b.acao].oculto != 0;
+        BOOL oculto = b.pers < 0 && trabalho.botao[b.acao].oculto != 0;
         b.alpha = oculto ? .25 : MAX(.3, trabalho.opacidade);
-        const Info *info = info_de(b.acao);
-        NSString *texto = info ? @(info->nome) : @"";
-        b.rotulo.text = oculto ? [texto stringByAppendingString:@" (oculto)"] : texto;
+        const Info *info = b.pers < 0 ? info_de(b.acao) : NULL;
+        NSString *rotulo = b.pers >= 0 ? nome_pers(&trabalho.pers[b.pers]) : info ? @(info->nome) : @"";
+        b.rotulo.text = oculto ? [rotulo stringByAppendingString:@" (oculto)"] : rotulo;
         b.layer.borderColor = (b == escolhido ? laranja() : [UIColor colorWithWhite:1 alpha:.45]).CGColor;
         b.layer.borderWidth = b == escolhido ? 3 : 2;
     }
     [self bringSubviewToFront:painel];
+    [self bringSubviewToFront:folha];
     [self bringSubviewToFront:confirma];
     [self disporPainel:a];
+    [self disporFolha:a];
     [self disporConfirmacao];
 }
 // Coloca as vistas lado a lado a partir de x, numa linha de altura h; devolve o x final.
@@ -564,16 +1046,16 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
     const CGFloat margem = 12, linha = 34;
     CGFloat fim1;
     if ([self escolhido]) {
-        NSArray<UIView *> *v = @[nome, rTamanho, sTamanho, bOcultar, rAlternar, swAlternar, rMirar, swMirar];
-        const CGFloat w[] = {150, 58, 120, 80, 58, 40, 108, 40};
+        NSArray<UIView *> *v = @[nome, rTamanho, sTamanho, bOcultar, bEditar, bApagar, rAlternar, swAlternar, rMirar, swMirar];
+        const CGFloat w[] = {150, 58, 120, 80, 72, 76, 58, 40, 108, 40};
         fim1 = enfileirar(v, w, margem, margem, linha);
     } else {
         NSArray<UIView *> *v = @[dica, rOpacidade, sOpacidade, rSticks, sSticks];
         const CGFloat w[] = {250, 70, 120, 46, 120};
         fim1 = enfileirar(v, w, margem, margem, linha);
     }
-    NSArray<UIView *> *v2 = @[bPadraoDeste, bRestaurar, bMoverPainel, bCancelar, bConcluir];
-    const CGFloat w2[] = {108, 120, 128, 92, 100};
+    NSArray<UIView *> *v2 = @[bNovo, bPadraoDeste, bRestaurar, bMoverPainel, bCancelar, bConcluir];
+    const CGFloat w2[] = {104, 108, 120, 128, 92, 100};
     CGFloat fim2 = enfileirar(v2, w2, margem, margem + linha + 10, linha);
     CGFloat largura = MAX(fim1, fim2) - 8 + margem, altura = margem + linha + 10 + linha + margem;
     // Cabe na zona segura: se não couber, o painel inteiro encolhe.
@@ -594,14 +1076,23 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 - (void)atualizarPainel {
     HL2EdBotao *b = [self escolhido];
-    const Info *info = b ? info_de(b.acao) : NULL;
+    const Pers *p = [self persEscolhido];
+    const Info *info = b && !p ? info_de(b.acao) : NULL;
     unsigned pode = info ? info->pode : 0;
+    if (p) pode = PODE_MIRAR | (kModelos[p->modelo].tipo == TIPO_COMANDO ? PODE_ALTERNAR : 0);
     BOOL sel = b != nil;
-    nome.hidden = rTamanho.hidden = sTamanho.hidden = bOcultar.hidden = bPadraoDeste.hidden = !sel;
+    nome.hidden = rTamanho.hidden = sTamanho.hidden = !sel;
+    bOcultar.hidden = bPadraoDeste.hidden = !sel || p;
+    bEditar.hidden = bApagar.hidden = !p;
     rAlternar.hidden = swAlternar.hidden = !(pode & PODE_ALTERNAR);
     rMirar.hidden = swMirar.hidden = !(pode & PODE_MIRAR);
     dica.hidden = rOpacidade.hidden = sOpacidade.hidden = rSticks.hidden = sSticks.hidden = sel;
-    if (b) {
+    if (p) {
+        nome.text = nome_pers(p);
+        sTamanho.value = p->tamanho;
+        swAlternar.on = p->alternar != 0;
+        swMirar.on = p->mirar != 0;
+    } else if (b) {
         const rt_touch_button *t = &tabela[b.indice];
         const Ajuste *j = &trabalho.botao[b.acao];
         nome.text = info ? @(info->nome) : @"";
@@ -612,6 +1103,8 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
         swAlternar.on = j->alternar >= 0 ? j->alternar != 0 : (t->flags & RT_TOUCH_TOGGLE) != 0;
         swMirar.on = j->mirar >= 0 ? j->mirar != 0 : (t->flags & RT_TOUCH_AIM) != 0;
     }
+    bNovo.enabled = trabalho.nPers < MAX_PERS;
+    bNovo.alpha = bNovo.enabled ? 1 : .5;
     sOpacidade.value = trabalho.opacidade;
     sSticks.value = trabalho.sticks;
     [bMoverPainel setTitle:painelEmbaixo ? @"Painel em cima" : @"Painel embaixo" forState:UIControlStateNormal];
@@ -628,7 +1121,7 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)event;
-    if (!confirma.hidden) return;
+    if (!confirma.hidden || !folha.hidden) return;
     BOOL mudou = NO;
     for (UITouch *t in touches) {
         if (arrasto) break;
@@ -660,10 +1153,17 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
     double r = tam / 2.0;
     double cx = limitar(p.x - deslocamento.x, CGRectGetMinX(a) + r, CGRectGetMaxX(a) - r);
     double cy = limitar(p.y - deslocamento.y, CGRectGetMinY(a) + r, CGRectGetMaxY(a) - r);
-    Ajuste *j = &trabalho.botao[b.acao];
-    j->posicao = 1;
-    j->fx = (cx - CGRectGetMinX(a)) / a.size.width;
-    j->fy = (cy - CGRectGetMinY(a)) / a.size.height;
+    double fx = (cx - CGRectGetMinX(a)) / a.size.width, fy = (cy - CGRectGetMinY(a)) / a.size.height;
+    Pers *criado = [self persEscolhido];
+    if (criado) {
+        criado->fx = fx;
+        criado->fy = fy;
+    } else {
+        Ajuste *j = &trabalho.botao[b.acao];
+        j->posicao = 1;
+        j->fx = fx;
+        j->fy = fy;
+    }
     [self redesenhar];
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -675,12 +1175,15 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 - (void)pinca:(UIPinchGestureRecognizer *)g {
     HL2EdBotao *b = [self escolhido];
-    if (!b || !confirma.hidden) return;
+    if (!b || !confirma.hidden || !folha.hidden) return;
     if (g.state == UIGestureRecognizerStateBegan) tamanhoBase = b.tamanho;
     else if (g.state != UIGestureRecognizerStateChanged) return;
     arrasto = nil;
-    trabalho.botao[b.acao].tamanho = (float)limitar(tamanhoBase * g.scale, kTamanhoMin, kTamanhoMax);
-    sTamanho.value = trabalho.botao[b.acao].tamanho;
+    float tamanho = (float)limitar(tamanhoBase * g.scale, kTamanhoMin, kTamanhoMax);
+    Pers *criado = [self persEscolhido];
+    if (criado) criado->tamanho = tamanho;
+    else trabalho.botao[b.acao].tamanho = tamanho;
+    sTamanho.value = tamanho;
     [self redesenhar];
 }
 
@@ -688,7 +1191,9 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 - (void)mudouTamanho:(UISlider *)s {
     HL2EdBotao *b = [self escolhido];
     if (!b) return;
-    trabalho.botao[b.acao].tamanho = s.value;
+    Pers *criado = [self persEscolhido];
+    if (criado) criado->tamanho = s.value;
+    else trabalho.botao[b.acao].tamanho = s.value;
     [self redesenhar];
 }
 - (void)mudouOpacidade:(UISlider *)s {
@@ -701,16 +1206,51 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 - (void)mudouAlternar:(UISwitch *)s {
     HL2EdBotao *b = [self escolhido];
-    if (b) trabalho.botao[b.acao].alternar = s.on ? 1 : 0;
+    Pers *criado = [self persEscolhido];
+    if (criado) criado->alternar = s.on ? 1 : 0;
+    else if (b) trabalho.botao[b.acao].alternar = s.on ? 1 : 0;
 }
 - (void)mudouMirar:(UISwitch *)s {
     HL2EdBotao *b = [self escolhido];
-    if (b) trabalho.botao[b.acao].mirar = s.on ? 1 : 0;
+    Pers *criado = [self persEscolhido];
+    if (criado) criado->mirar = s.on ? 1 : 0;
+    else if (b) trabalho.botao[b.acao].mirar = s.on ? 1 : 0;
+}
+- (void)tocouNovo {
+    if (trabalho.nPers >= MAX_PERS) return;
+    pers_novo(&trabalho.pers[trabalho.nPers++], 0);
+    [self recriarPersonalizados];
+    selecionado = nFixos + trabalho.nPers - 1;
+    [self atualizarPainel];
+    [self abrirFolha];
+}
+- (void)tocouEditar {
+    [self abrirFolha];
+}
+- (void)apagarEscolhido {
+    HL2EdBotao *b = [self escolhido];
+    if (!b || b.pers < 0 || b.pers >= trabalho.nPers) return;
+    int i = b.pers;
+    memmove(&trabalho.pers[i], &trabalho.pers[i + 1], sizeof(Pers) * (size_t)(trabalho.nPers - i - 1));
+    --trabalho.nPers;
+    selecionado = -1;
+    [self recriarPersonalizados];
+    [self atualizarPainel];
+    [self redesenhar];
+}
+- (void)tocouApagar {
+    const Pers *p = [self persEscolhido];
+    if (!p) return;
+    __weak HL2EdTela *fraca = self;
+    [self perguntar:[NSString stringWithFormat:@"Tem certeza? O botão \u201c%@\u201d vai ser apagado. Só é gravado "
+                                               @"quando você tocar em Concluir.", nome_pers(p)]
+                sim:@"Apagar"
+               acao:^{ [fraca apagarEscolhido]; }];
 }
 - (void)tocouOcultar {
     HL2EdBotao *b = [self escolhido];
     const Info *info = b ? info_de(b.acao) : NULL;
-    if (!b || (info && (info->pode & SEMPRE_VISIVEL))) return;
+    if (!b || b.pers >= 0 || (info && (info->pode & SEMPRE_VISIVEL))) return;
     Ajuste *j = &trabalho.botao[b.acao];
     j->oculto = !j->oculto;
     [self atualizarPainel];
@@ -718,7 +1258,7 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 - (void)tocouPadraoDeste {
     HL2EdBotao *b = [self escolhido];
-    if (!b) return;
+    if (!b || b.pers >= 0) return;
     ajuste_padrao(&trabalho.botao[b.acao]);
     [self atualizarPainel];
     [self redesenhar];
@@ -726,13 +1266,15 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 - (void)restaurarTudo {
     ajustes_padrao(&trabalho);
     selecionado = -1;
+    [self recriarPersonalizados];
     [self atualizarPainel];
     [self redesenhar];
 }
 - (void)tocouRestaurar {
     __weak HL2EdTela *fraca = self;
-    [self perguntar:@"Tem certeza? Todos os botões voltam à posição, ao tamanho e às opções originais, e a "
-                    @"opacidade e os sticks voltam ao normal. Só é gravado quando você tocar em Concluir."
+    [self perguntar:@"Tem certeza? Todos os botões voltam à posição, ao tamanho e às opções originais, a "
+                    @"opacidade e os sticks voltam ao normal, e os botões criados por você são apagados. Só é "
+                    @"gravado quando você tocar em Concluir."
                 sim:@"Restaurar"
                acao:^{ [fraca restaurarTudo]; }];
 }
@@ -805,7 +1347,6 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 @end
 
-static UIWindow *janela;
 static void (^ao_fechar)(int);
 static CFRunLoopObserverRef observador;
 
@@ -814,6 +1355,7 @@ static void editor_fechar(int salvou) {
     // Depois da ação do botão que pediu para fechar, não no meio dela.
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!janela) return;
+        devolver_chave();
         janela.hidden = YES;
         janela.rootViewController = nil;
         janela = nil;

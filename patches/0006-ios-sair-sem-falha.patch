@@ -1,0 +1,54 @@
+--- a/runtime/process.c
++++ b/runtime/process.c
+@@ -9,6 +9,9 @@
+ #include "posix.h"
+ #include "modules.h"
+ #include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++#include "ios/hl2ios_sair.h"   // hl2ios
++#endif
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <pwd.h>
+@@ -228,8 +231,16 @@
+         _exit((int)(rt_arg32(c, 0) & 0xff));
+     } else if (!strcmp(name, "exit")) {
+         int status = (int)rt_arg32(c, 0);
++#if TARGET_OS_IPHONE
++        // hl2ios (runtime/ios/hl2ios_sair.m) : l'app passe en arrière-plan avec l'animation du
++        // système avant la fin du processus, qui se fait par _exit (sans destructeurs hôtes).
++        hl2ios_sair_animar(status);
++        run_guest_atexit(c);
++        hl2ios_sair_fim(status);
++#else
+         run_guest_atexit(c);
+         exit(status);
++#endif
+     } else if (!strcmp(name, "alarm")) {
+         c->eax = alarm(rt_arg32(c, 0));
+     } else if (!strcmp(name, "uuid_generate")) {
+--- a/src/main.c
++++ b/src/main.c
+@@ -1,4 +1,10 @@
+ #include "modules.h"
++#if defined(__APPLE__)   // hl2ios
++#include <TargetConditionals.h>
++#if TARGET_OS_IPHONE
++#include "ios/hl2ios_sair.h"
++#endif
++#endif
+ #include "game_data.h"
+ #include <pthread.h>
+ #include <stdio.h>
+@@ -96,6 +102,11 @@
+     fprintf(stderr, "entering recompiled " RT_GAME_PROGRAM " main at %#x\n", entry);
+     int result = (int32_t)rt_invoke(&cpu, entry, args, 3);
+     fprintf(stderr, RT_GAME_PROGRAM " main returned %d\n", result);
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++    // hl2ios (runtime/ios/hl2ios_sair.m) : pas de rt_destroy sous les threads du jeu encore en
++    // marche ; l'app passe en arrière-plan, puis _exit.
++    hl2ios_sair_fim(result);
++#endif
+     rt_destroy();
+     return result;
+ }
