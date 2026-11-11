@@ -14,8 +14,9 @@ for p in "$RAIZ"/patches/*.patch; do
 	echo "patch: $(basename "$p")"
 done
 
-# arquivos novos do runtime de iPhone (o tools/build_ios.py compila tudo de runtime/ios)
-for f in "$RAIZ"/extras/*.m "$RAIZ"/extras/*.c; do
+# arquivos novos do runtime de iPhone (o tools/build_ios.py compila tudo de runtime/ios;
+# os .h vão junto porque o touch_controls.m do patch 0003 inclui o hl2ios_toque.h)
+for f in "$RAIZ"/extras/*.m "$RAIZ"/extras/*.c "$RAIZ"/extras/*.h; do
 	[ -f "$f" ] || continue
 	cp "$f" "$RECOMP/runtime/ios/"
 	echo "extra: $(basename "$f")"

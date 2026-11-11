@@ -1,0 +1,115 @@
+diff --git a/runtime/ios/touch_controls.m b/runtime/ios/touch_controls.m
+index c0788be..1205734 100644
+--- a/runtime/ios/touch_controls.m
++++ b/runtime/ios/touch_controls.m
+@@ -55,6 +55,7 @@
+ #include "game_ios.h"
+ #include "gyro_ios.h"
+ #include "touch_layout.h"
++#include "hl2ios_toque.h"   // hl2ios : éditeur des commandes et réglages enregistrés
+ #include "touch_test.h"
+ #include "lifecycle_ios.h"
+ 
+@@ -421,6 +422,19 @@ static const CFTimeInterval kQuickLoadHold = 0.5;
+     heldTap.active = 0;
+     [self setNeedsRender];
+ }
++// hl2ios : éditeur des commandes (hl2ios_toque.m), par-dessus le menu de pause
++// (Échap) ; à la fermeture, disposition refaite et partie reprise.
++- (void)openEditor {
++    [self tapKey:SDL_SCANCODE_ESCAPE];
++    __weak P2TouchControls *weakSelf = self;
++    hl2ios_toque_editor_abrir(^(int salvou) {
++        P2TouchControls *s = weakSelf;
++        if (!s) return;
++        (void)salvou;
++        [s invalidateLayout];
++        if (rt_ios_game_ui_visible()) [s tapKey:SDL_SCANCODE_ESCAPE];
++    });
++}
+ - (void)toggleLookMode {
+     trackpad = !trackpad;
+     [NSUserDefaults.standardUserDefaults setBool:trackpad forKey:kTrackpadKey];
+@@ -496,6 +510,9 @@ static const CFTimeInterval kQuickLoadHold = 0.5;
+     case RT_TOUCH_QUICKSAVE: [self quickSave:down]; break;
+     case RT_TOUCH_WEAPON_PREV: if (down) [self wheel:1]; break;
+     case RT_TOUCH_WEAPON_NEXT: if (down) [self wheel:-1]; break;
++    // hl2ios : saut puis accroupi (comptés comme leurs boutons : un accroupi en bascule reste tenu).
++    case RT_TOUCH_LONG_JUMP: [self action:RT_TOUCH_JUMP down:down]; [self action:RT_TOUCH_CROUCH down:down]; break;
++    case RT_TOUCH_EDIT: if (down) [self openEditor]; break;
+     default: break;
+     }
+ }
+@@ -513,7 +530,7 @@ static const CFTimeInterval kQuickLoadHold = 0.5;
+ 
+ // ---- disposition (points, dans la zone sûre) ----
+ - (CGRect)area { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
+-- (CGFloat)stickRadius { return MIN(66, self.area.size.height * .15); }
++- (CGFloat)stickRadius { return MIN(66, self.area.size.height * .15) * hl2ios_toque_escala_sticks(); }   // hl2ios : réglage de l'éditeur
+ - (CGPoint)restingStick:(BOOL)right {
+     CGRect a = self.area;
+     // HL2 : stick de la caméra plus au centre, à l'écart de la grappe du tir.
+@@ -577,12 +594,17 @@ static UIImage *icon_image(NSString *symbol, CGFloat point_size) {
+         if ((t->flags & RT_TOUCH_DATASET) && !rt_ios_backtap_dataset_on()) continue;
+         double cx, cy;
+         rt_touch_place(t, CGRectGetMinX(a), CGRectGetMinY(a), a.size.width, a.size.height, &cx, &cy);
++        // hl2ios : position, taille, masquage et options venus de l'éditeur (Documents/hl2-toque.json).
++        float size = t->size;
++        unsigned flags = t->flags;
++        if (!hl2ios_toque_ajustar(t->action, CGRectGetMinX(a), CGRectGetMinY(a), a.size.width, a.size.height,
++                                  &cx, &cy, &size, &flags)) continue;
+         UIColor *color = t->color == RT_TOUCH_BLUE ? blue : t->color == RT_TOUCH_ORANGE ? orange
+                        : t->color == RT_TOUCH_RED ? red : t->color == RT_TOUCH_FLAG ? flag_red : ink;
+         // Mode de la caméra : l'icône montre le mode actuel.
+         NSString *symbol = t->action == RT_TOUCH_LOOK_MODE ? (trackpad ? @"hand.draw.fill" : @"r.joystick.fill")
+                          : t->symbol ? @(t->symbol) : nil;
+-        b[n++] = (Button){t->action, symbol, color, CGPointMake(cx, cy), t->size, t->flags};
++        b[n++] = (Button){t->action, symbol, color, CGPointMake(cx, cy), size, flags};
+     }
+     return n;
+ }
+@@ -903,6 +925,7 @@ static void set_circle(CAShapeLayer *l, CGFloat diameter) {
+     for (int right = 0; right < 2; ++right) {
+         BOOL hidden = !shown || (right && trackpad);
+         stickRing[right].hidden = stickKnob[right].hidden = hidden;
++        stickRing[right].opacity = stickKnob[right].opacity = hl2ios_toque_opacidade();   // hl2ios
+         if (hidden) continue;
+         CGFloat r = self.stickRadius;
+         CGPoint origin = [self restingStick:right], knob = origin;
+@@ -920,6 +943,7 @@ static void set_circle(CAShapeLayer *l, CGFloat diameter) {
+         CAShapeLayer *l = buttonLayer[i];
+         l.hidden = i >= n;
+         if (i >= n) continue;
++        l.opacity = hl2ios_toque_opacidade();   // hl2ios : l'icône (sous-calque) suit
+         CGFloat s = b[i].size;
+         if (s != buttonSize[i]) { buttonSize[i] = s; set_circle(l, s); }
+         l.position = b[i].at;
+diff --git a/runtime/ios/touch_layout.c b/runtime/ios/touch_layout.c
+index dfb05d0..184aac9 100644
+--- a/runtime/ios/touch_layout.c
++++ b/runtime/ios/touch_layout.c
+@@ -56,6 +56,11 @@ static const rt_touch_button hl2[] = {
+     // En haut à gauche, après le compteur d'images : le coin bas gauche
+     // cacherait la santé du HUD.
+     {RT_TOUCH_LOOK_MODE, "r.joystick.fill", RT_TOUCH_INK, 0, 0, 170, EDGE, SMALL, 0},
++    // hl2ios : pulo agachado à gauche du rechargement, et l'éditeur des commandes
++    // (hl2ios_toque.m) après le mode de la caméra. Positions et tailles réglables
++    // dans l'éditeur (Documents/hl2-toque.json).
++    {RT_TOUCH_LONG_JUMP, "arrow.up.to.line", RT_TOUCH_ORANGE, 1, .36f, -186, 0, 46, 0},
++    {RT_TOUCH_EDIT, "gearshape.fill", RT_TOUCH_INK, 0, 0, 218, EDGE, SMALL, 0},
+ };
+ 
+ const rt_touch_button *rt_touch_layout(rt_ios_layout layout, int *count) {
+diff --git a/runtime/ios/touch_layout.h b/runtime/ios/touch_layout.h
+index 26c99e9..cc0784b 100644
+--- a/runtime/ios/touch_layout.h
++++ b/runtime/ios/touch_layout.h
+@@ -19,6 +19,8 @@ typedef enum {
+     RT_TOUCH_WEAPON_PREV,   // molette vers le haut (invprev)
+     RT_TOUCH_WEAPON_NEXT,   // molette vers le bas (invnext)
+     RT_TOUCH_QUICKSAVE,     // F6 (save quick)
++    RT_TOUCH_LONG_JUMP,     // hl2ios : espace + Ctrl gauche (pulo agachado, alias « +jump; +duck »)
++    RT_TOUCH_EDIT,          // hl2ios : ouvre l'éditeur des commandes (hl2ios_toque.m)
+     RT_TOUCH_ACTION_COUNT
+ } rt_touch_action;
+ 

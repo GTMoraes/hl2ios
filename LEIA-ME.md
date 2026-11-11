@@ -5,8 +5,8 @@ App de iPhone com o Half-Life 2, o Episode One, o Episode Two e o Lost Coast, ge
 é traduzido para C e compilado para ARM64, sem emulador e sem JIT. O build roda no GitHub Actions
 (runner macOS) e o app chega pelo TestFlight, como o `hlios` e o `nfios`.
 
-**Estado: etapa 1.** Em 10/11/2026 a build chegou ao TestFlight e o app abriu no iPhone 17. Falta
-copiar os dados do jogo e jogar (etapa 2).
+**Estado:** em 10/11/2026 o jogo rodou no iPhone 17 (Metal, 238 MB de código, build de 48 min).
+Em 11/11/2026 entrou o editor dos controles de toque (versão 0.2.0), ainda não compilado.
 
 ## Regra deste repositório: nada da Valve aqui
 
@@ -41,6 +41,7 @@ qualquer `git add`, confira no `git status` que não aparece nada disso.**
 versoes.env                       versões fixadas
 patches/                          mudanças sobre o source-recomp (git apply)
 extras/hl2ios_dados.m             tela de espera pelos dados do jogo (arquivo novo do runtime)
+extras/hl2ios_toque.m e .h        editor dos controles de toque e os ajustes salvos
 raizes/hl2-extras.json            alvos de chamada indireta achados no iPhone (começa vazio)
 app/direitos.plist                direitos do app (Increased Memory Limit)
 app/PrivacyInfo.xcprivacy         manifesto de privacidade
@@ -63,6 +64,9 @@ O projeto foi feito para um Mac com o iPhone no cabo. Aqui não há Mac, então:
    tela diz o que copiar, mostra o que falta e libera o botão Iniciar com as sete pastas no lugar.
 5. **Ícone, Info.plist e privacidade** (`scripts/montar-app.sh`): ícone em catálogo, chaves que o
    App Store Connect confere, só iPhone.
+6. **Editor dos controles** (`patches/0003` e `extras/hl2ios_toque.m`): dois botões novos na tabela
+   (pulo agachado e a engrenagem do editor), e a camada de toque passa a aplicar os ajustes salvos.
+   Detalhes na seção "Editor dos controles".
 
 O binário de Mac que vem esquecido no depot (`bin/ffmpegsumo.so`) é tirado do app: binário Mach-O
 solto é recusado no envio, e o jogo não usa esse arquivo.
@@ -136,6 +140,36 @@ O push já dispara a build (aba Actions).
 
 Os episódios e o Lost Coast abrem pelo menu do jogo. Os saves ficam em `hl2-userdata`.
 
+## Editor dos controles
+
+A engrenagem no alto (à direita do botão de stick/trackpad) pausa o jogo e abre o editor por cima
+do menu de pausa.
+
+- **Mover:** arraste o botão. Nada sai da zona segura da tela.
+- **Tamanho:** pince com dois dedos, ou use o controle Tamanho do painel (28 a 140 pontos).
+- **Ocultar / Mostrar:** o botão some do jogo e fica apagado no editor, marcado "(oculto)". A
+  engrenagem não pode ser ocultada.
+- **Alternar** (tiro, tiro secundário, agachar, correr): um toque liga, outro desliga, em vez de
+  segurar.
+- **Mira ao arrastar** (botões de ação): o dedo que segura o botão também gira a câmera ao
+  arrastar, como o tiro faz por padrão.
+- **Sem botão escolhido:** opacidade de todos os botões e dos sticks, e tamanho dos sticks (um
+  stick maior pede mais curso do dedo até o máximo). Os dois anéis mostram os sticks em repouso.
+- **Padrão deste** volta só o botão escolhido; **Restaurar tudo** volta tudo e pergunta antes.
+- **Concluir** grava e volta ao jogo; **Cancelar** descarta e pergunta antes, se houve mudança.
+- **Painel embaixo / em cima:** tira o painel de cima dos botões do alto.
+
+A linha tracejada no meio é a divisa dos sticks: o dedo que começa à esquerda anda, o que começa à
+direita mexe a câmera. Ela não muda no editor.
+
+**Pulo agachado** (botão laranja, à esquerda do recarregar): aperta pulo e agachar juntos, o
+equivalente no Half-Life 2 ao pulo longo dos outros jogos. Se o agachar alternado estiver ligado,
+ele continua agachado depois.
+
+Os ajustes ficam em `hl2-toque.json`, na pasta do app no Arquivos, e a versão anterior em
+`hl2-toque-anterior.json`. Para começar do zero fora do editor, apague o `hl2-toque.json` com o app
+fechado. O registro (`game.log`) mostra o que foi lido e gravado, nas linhas `[hl2ios] toque:`.
+
 ## Quando travar
 
 É esperado, mais nos episódios: o tradutor não acha sozinho toda função chamada por ponteiro, e a
@@ -157,6 +191,9 @@ linha com "target not recompiled" e o endereço.
 - **Arquivos ELF e DLL dentro do app** (o depot): não conheço regra do envio contra eles, mas é a
   primeira vez que passam por ele.
 - **iPhone 17:** o projeto só foi testado num iPhone 15 Pro Max.
+- **Editor numa janela própria:** o laço do SDL não deixa o UIKit desenhar sozinho, então o editor
+  força cada desenho (como a camada de toque do projeto faz). Se ele abrir sem responder ou sem
+  atualizar a tela, é aqui.
 
 ## Atualizar
 
