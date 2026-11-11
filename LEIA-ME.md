@@ -75,6 +75,10 @@ O projeto foi feito para um Mac com o iPhone no cabo. Aqui não há Mac, então:
 9. **Posição e FOV da arma** (`patches/0007`, `extras/hl2ios_arma.c`): o balanço da arma ao andar
    (`AddViewmodelBob` do `client.so`) passa por uma função do app, que roda a original e depois
    desloca a arma. Detalhes em "Posição e FOV da arma".
+10. **Abaixar a arma** (`patches/0008`, `extras/hl2ios_jogo.c`): toque curto no botão de guardar
+   abaixa a arma; o primeiro toque no tiro só a levanta. Detalhes em "Guardar arma".
+11. **Munição de reserva em triplo** (`extras/hl2ios_jogo.c`): o máximo de cada munição que o
+   jogador carrega é o triplo do jogo. Detalhes em "Munição de reserva".
 
 O binário de Mac que vem esquecido no depot (`bin/ffmpegsumo.so`) é tirado do app: binário Mach-O
 solto é recusado no envio, e o jogo não usa esse arquivo.
@@ -197,8 +201,22 @@ Avançado) ou use um botão de Comando com `hud_fastswitch 1`.
 
 ### Guardar arma
 
-O botão do modelo Guardar arma guarda a arma com a animação (o `impulse 200` do jogo) e saca de
-novo no toque seguinte. Com a arma guardada:
+O botão do modelo Guardar arma faz duas coisas:
+
+- **toque curto:** abaixa a arma, na mesma posição de quando se mira um aliado; o toque seguinte a
+  levanta. Com ela abaixada, o primeiro toque no tiro ou no tiro secundário só levanta a arma, sem
+  atirar (o próximo toque atira); o recarregar recarrega na hora e a arma volta abaixada; um botão
+  de arma levanta e troca. O botão fica aceso enquanto ela está abaixada;
+- **segurar (0,4 s):** guarda a arma com a animação (o `impulse 200` do jogo); com ela guardada,
+  apertar o botão saca de novo.
+
+Abaixar usa o estado global `friendly_encounter`, o mesmo que o jogo usa para abaixar a arma
+(no `server.so`, só `WeaponShouldBeLowered` o lê). O app o liga e desliga pelo comando
+`global_set` do servidor, chamado direto, sem `sv_cheats`. O estado vai junto no save e atravessa
+a troca de mapa; abaixada pelo app, ela continua abaixada ao carregar um save. A arma de
+gravidade não tem animação de abaixar e fica como está.
+
+Com a arma guardada:
 
 - o tiro, o tiro secundário e o recarregar mostram um cadeado e não disparam; tocar num deles
   saca a arma, sem atirar;
@@ -211,6 +229,17 @@ novo no toque seguinte. Com a arma guardada:
 O `impulse 200` só vale com `sv_cheats 1`. O app liga o `sv_cheats` só pelo instante em que o jogo
 processa o comando e volta a 0 em seguida (se já estava em 1, não mexe). O registro mostra tudo
 nas linhas `[hl2ios] arma:`.
+
+### Munição de reserva
+
+O jogador carrega o triplo da munição de reserva do jogo (pistola 150 vira 450, granadas 5 viram
+15 e assim por diante). O carregador de cada arma não muda. O máximo de cada munição vem das
+variáveis `sk_max_*` (`sk_max_pistol`, `sk_max_357`, `sk_max_smg1`, `sk_max_smg1_grenade`,
+`sk_max_ar2`, `sk_max_ar2_altfire`, `sk_max_buckshot`, `sk_max_crossbow`, `sk_max_rpg_round`,
+`sk_max_grenade`), que o `skill.cfg` do jogo põe. Uma vez por segundo o app confere cada uma:
+se o valor não é o que ele pôs, é um valor novo do jogo, e o app põe o triplo dele. Elas não são
+de trapaça, então o `sv_cheats` não as afeta. O registro mostra cada troca nas linhas
+`[hl2ios] munição:`. Para mudar o fator, troque `MUNICAO_FATOR` em `extras/hl2ios_jogo.c`.
 
 ### Posição e FOV da arma
 

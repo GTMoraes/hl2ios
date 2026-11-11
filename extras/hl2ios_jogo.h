@@ -19,6 +19,19 @@ void hl2ios_jogo_guardar(void);
 // Saca a arma guardada (toque no tiro com a arma guardada).
 void hl2ios_jogo_sacar(void);
 
+// Botão de guardar apertado (1) ou solto (0): toque curto abaixa ou levanta a arma (estado
+// global friendly_encounter, pelo global_set); segurar 0,4 s guarda a arma. Com a arma
+// guardada, o botão a saca ao apertar.
+void hl2ios_jogo_botao_guardar(int apertou);
+
+// Levanta a arma abaixada pelo botão (primeiro toque no tiro ou no tiro secundário, botões
+// de arma).
+void hl2ios_jogo_levantar(void);
+
+// 1 enquanto a arma está abaixada pelo botão (e ainda não foi pedido levantar): o toque no tiro
+// ou no tiro secundário só a levanta, sem atirar.
+int hl2ios_jogo_abaixada(void);
+
 // Fecha (0) ou abre (1) o menu de pausa do jogo (gameui_hide, gameui_activate), no próximo
 // quadro: o ajuste da arma no editor mostra o jogo rodando atrás.
 void hl2ios_jogo_menu(int mostrar);
@@ -31,7 +44,7 @@ void hl2ios_jogo_selecao(void);
 // pelo app e continua guardada no jogo, fora de veículo.
 int hl2ios_jogo_bloqueia_tiro(void);
 
-// 1 enquanto a arma está guardada pelo app (para acender o botão de guardar).
+// 1 enquanto a arma está guardada ou abaixada pelo app (para acender o botão de guardar).
 int hl2ios_jogo_guardada(void);
 
 // Muda sempre que o travamento ou a arma guardada mudam: a camada de toque refaz os ícones.

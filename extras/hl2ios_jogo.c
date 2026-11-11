@@ -17,6 +17,23 @@
 // estado de vida (m_lifeState). Os deslocamentos vêm das tabelas de rede do jogo (VClient017,
 // GetAllClasses); se a busca falhar, valem os achados no client.so do depot fixado.
 //
+// Arma abaixada: o toque curto no botão de guardar abaixa a arma (a mesma posição de quando se
+// mira um aliado) e o toque seguinte a levanta; segurar o botão por 0,4 s guarda a arma. O
+// jogo abaixa a arma enquanto o estado global "friendly_encounter" está ligado
+// (CBaseHLCombatWeapon::WeaponShouldBeLowered, o único uso dele no server.so), e o app o liga e
+// desliga pelo comando global_set do servidor, chamado direto (sem sv_cheats: a trava de
+// trapaça fica no despacho do console, e o global_set não confere nada). O estado global vai
+// junto no save e atravessa a troca de mapa. Com a arma abaixada, o primeiro toque no tiro ou
+// no tiro secundário só a levanta, sem atirar (a camada de toque engole o toque); o recarregar
+// recarrega na hora e a arma volta abaixada; os botões de arma a levantam.
+//
+// Munição de reserva: o máximo que o jogador carrega de cada munição vem das variáveis
+// sk_max_* (sk_max_pistol, sk_max_grenade...), lidas a cada uso (CAmmoDef::MaxCarry) e
+// postas pelo skill.cfg do jogo. Elas são só FCVAR_REPLICATED (sem trapaça: o sv_cheats não as
+// devolve). Uma vez por segundo o app confere cada uma: se o valor não é o que ele pôs, é o do
+// jogo (skill.cfg rodou de novo, jogo novo, dificuldade trocada), e o app põe o triplo. O
+// carregador de cada arma não muda.
+//
 // FOV da arma: viewmodel_fov, ajustado no editor por arma (hl2ios_toque.m) e posto direto na
 // variável (ICvar, sem passar pelo console, que pede sv_cheats). O jogo a devolve ao padrão
 // quando sv_cheats volta a 0; ela é posta de novo na leitura seguinte (50 ms).
@@ -252,6 +269,33 @@ static void impulso(CPU *c) {
     rt_ios_run_console_command(c, "impulse 200");
 }
 
+// ---- arma abaixada ----
+
+enum { SEGURAR_MS = 400 };
+static int abaixada;                // friendly_encounter ligado pelo app
+static int pedido_abaixar = -1;     // -1: nada; 0: levantar; 1: abaixar
+static int botao_preso;             // botão de guardar apertado, toque ou segurar ainda em aberto
+static uint64_t botao_desde;
+
+static void abaixar(CPU *c, int sim, const char *motivo) {
+    rt_ios_run_console_command(c, sim ? "global_set friendly_encounter 1" : "global_set friendly_encounter 0");
+    if (abaixada != sim) ++versao;
+    abaixada = sim;
+    fprintf(stderr, "[hl2ios] arma: %s (%s)\n", sim ? "abaixada" : "levantada", motivo);
+}
+
+static void tratar_abaixar(CPU *c) {
+    int p = pedido_abaixar;
+    pedido_abaixar = -1;
+    if (p == 0) { if (abaixada) abaixar(c, 0, "tiro ou troca de arma"); return; }
+    if (abaixada) { abaixar(c, 0, "toque no botão"); return; }
+    if (!quebrado && (!ultimo.valido || !ultimo.tem_arma || !ultimo.vivo || ultimo.veiculo)) {
+        fprintf(stderr, "[hl2ios] arma: nada a abaixar agora (sem arma, morto ou em veículo)\n");
+        return;
+    }
+    abaixar(c, 1, "toque no botão");
+}
+
 static void tratar_pedido(CPU *c, uint64_t agora) {
     int p = pedido;
     pedido = PEDIDO_NENHUM;
@@ -266,6 +310,7 @@ static void tratar_pedido(CPU *c, uint64_t agora) {
             fprintf(stderr, "[hl2ios] arma: o jogo já esconde a arma, nada feito\n");
             return;
         }
+        if (abaixada) abaixar(c, 0, "a arma vai ser guardada");
         impulso(c);
         arma_guardada = ultimo.arma;
         prazo = agora + 2500;
@@ -288,6 +333,9 @@ static void atualizar(CPU *c, uint64_t agora) {
     if (e.jogador != jogador_visto) {
         jogador_visto = e.jogador;
         jogador_desde = agora;
+        // Save carregado ou mapa novo: o estado global vem do save. Abaixada pelo app, ela
+        // continua abaixada (o botão segue aceso); levantada, o app não mexe.
+        if (abaixada) abaixar(c, 1, "jogador novo");
     }
     int saiu = !e.tem_arma || !e.vivo || e.arma != arma_guardada;
     switch (estado) {
@@ -357,6 +405,51 @@ static void ajustar_fov(CPU *c) {
     }
 }
 
+// ---- munição de reserva ----
+
+enum { MUNICAO_FATOR = 3 };
+static const char *const kMunicao[] = {
+    "sk_max_pistol", "sk_max_357", "sk_max_smg1", "sk_max_smg1_grenade", "sk_max_ar2",
+    "sk_max_ar2_altfire", "sk_max_buckshot", "sk_max_crossbow", "sk_max_rpg_round", "sk_max_grenade",
+};
+enum { N_MUNICAO = (int)(sizeof(kMunicao) / sizeof(*kMunicao)) };
+static uint32_t municao_cv[N_MUNICAO];
+static char municao_posto[N_MUNICAO][16];   // último valor posto pelo app
+static uint64_t proxima_municao, proxima_busca_municao;
+static int municao_avisada;
+
+static void ajustar_municao(CPU *c, uint64_t agora) {
+    int faltam = 0;
+    for (int i = 0; i < N_MUNICAO; ++i) {
+        if (!municao_cv[i]) {
+            if (agora < proxima_busca_municao) { ++faltam; continue; }
+            municao_cv[i] = rt_ios_find_convar(c, kMunicao[i]);
+            if (!municao_cv[i]) { ++faltam; continue; }
+        }
+        const char *jogo = rt_ios_convar_string(municao_cv[i]);
+        if (!jogo[0] || !strcmp(jogo, municao_posto[i])) continue;
+        char quero[16];
+        snprintf(quero, sizeof(quero), "%d", (int)(atof(jogo) * MUNICAO_FATOR + .5));
+        char antes[16];
+        snprintf(antes, sizeof(antes), "%s", jogo);
+        if (rt_ios_set_convar(c, municao_cv[i], quero)) {
+            fprintf(stderr, "[hl2ios] munição: %s %s -> %s\n", kMunicao[i], antes, quero);
+            snprintf(municao_posto[i], sizeof(municao_posto[i]), "%s", quero);
+        } else {
+            // Não pegou: guarda o valor do jogo para não tentar de novo a cada segundo.
+            fprintf(stderr, "[hl2ios] munição: %s não aceitou %s (fica %s)\n", kMunicao[i], quero, antes);
+            snprintf(municao_posto[i], sizeof(municao_posto[i]), "%s", rt_ios_convar_string(municao_cv[i]));
+        }
+    }
+    if (faltam && agora >= proxima_busca_municao) {
+        proxima_busca_municao = agora + 5000;   // o server.so pode ainda não ter carregado
+        if (!municao_avisada) {
+            municao_avisada = 1;
+            fprintf(stderr, "[hl2ios] munição: %d variáveis sk_max_* ainda não achadas, tento de novo\n", faltam);
+        }
+    }
+}
+
 static uint64_t selecao_ate;   // seleção de arma aberta pelo HUD: o tiro confirma
 // Menu de pausa pedido pelo editor (-1: nada). Pelos comandos do motor, chamados direto: o Esc
 // enviado com a janela do editor por cima não fechava o menu.
@@ -374,7 +467,14 @@ static void conferir_versao(void) {
 
 void hl2ios_jogo_poll(void) {
     uint64_t agora = SDL_GetTicks64();
-    if (!fila_n && !pedido && menu_pedido < 0 && agora < proxima_leitura) { conferir_versao(); return; }
+    if (botao_preso && agora - botao_desde >= SEGURAR_MS) {   // segurou: guarda (ou saca) a arma
+        botao_preso = 0;
+        pedido = PEDIDO_ALTERNAR;
+    }
+    if (!fila_n && !pedido && pedido_abaixar < 0 && menu_pedido < 0 && agora < proxima_leitura) {
+        conferir_versao();
+        return;
+    }
     CPU *c = rt_foreign_thread_attach();
     if (!c) return;
     if (menu_pedido >= 0) {
@@ -390,7 +490,12 @@ void hl2ios_jogo_poll(void) {
         proxima_leitura = agora + 50;
         atualizar(c, agora);
         ajustar_fov(c);
+        if (agora >= proxima_municao) {
+            proxima_municao = agora + 1000;
+            ajustar_municao(c, agora);
+        }
     }
+    if (pedido_abaixar >= 0) tratar_abaixar(c);
     if (pedido) tratar_pedido(c, agora);
     conferir_versao();
 }
@@ -403,6 +508,23 @@ void hl2ios_jogo_menu(int mostrar) {
 void hl2ios_jogo_guardar(void) {
     pedido = PEDIDO_ALTERNAR;
 }
+void hl2ios_jogo_botao_guardar(int apertou) {
+    if (apertou) {
+        // Arma guardada: o botão saca na hora, tocado ou segurado.
+        if (estado != NORMAL) { botao_preso = 0; pedido = PEDIDO_ALTERNAR; return; }
+        botao_preso = 1;
+        botao_desde = SDL_GetTicks64();
+    } else if (botao_preso) {   // soltou antes de 0,4 s: toque curto
+        botao_preso = 0;
+        pedido_abaixar = 1;
+    }
+}
+void hl2ios_jogo_levantar(void) {
+    if (abaixada) pedido_abaixar = 0;
+}
+int hl2ios_jogo_abaixada(void) {
+    return abaixada && pedido_abaixar != 0;
+}
 void hl2ios_jogo_sacar(void) {
     if (estado == GUARDADA) pedido = PEDIDO_SACAR;
 }
@@ -410,13 +532,14 @@ void hl2ios_jogo_sacar(void) {
 // de um botão de arma, o tiro passa por 3 s. O jogo saca a arma escolhida (a mesma também:
 // Weapon_Switch chama Deploy se ela está escondida), e a leitura volta ao normal.
 void hl2ios_jogo_selecao(void) {
+    hl2ios_jogo_levantar();
     if (estado != NORMAL) selecao_ate = SDL_GetTicks64() + 3000;
 }
 int hl2ios_jogo_bloqueia_tiro(void) {
     return estado != NORMAL && !ultimo.veiculo && SDL_GetTicks64() >= selecao_ate;
 }
 int hl2ios_jogo_guardada(void) {
-    return estado == GUARDANDO || estado == GUARDADA;
+    return estado == GUARDANDO || estado == GUARDADA || abaixada;
 }
 unsigned hl2ios_jogo_versao(void) {
     return versao;

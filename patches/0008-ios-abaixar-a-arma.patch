@@ -1,0 +1,16 @@
+diff --git a/runtime/ios/touch_controls.m b/runtime/ios/touch_controls.m
+index 2f2e6e9..b2c63bf 100644
+--- a/runtime/ios/touch_controls.m
++++ b/runtime/ios/touch_controls.m
+@@ -503,6 +503,11 @@ static const CFTimeInterval kQuickLoadHold = 0.5;
+     // hl2ios : arme rangée par le bouton « ranger » : tir, tir secondaire et recharge ne
+     // partent pas ; l'appui ressort l'arme (hl2ios_jogo.c), sans tirer.
+     if (action == RT_TOUCH_FIRE || action == RT_TOUCH_ALT_FIRE || action == RT_TOUCH_RELOAD) {
++        // hl2ios : arme baissée par le bouton : le tir la relève sans tirer (appui avalé) ; la
++        // recharge part tout de suite et l'arme reste baissée.
++        if (down && action != RT_TOUCH_RELOAD && hl2ios_jogo_abaixada()) {
++            blocked[action] = YES; hl2ios_jogo_levantar(); return;
++        }
+         if (down && hl2ios_jogo_bloqueia_tiro()) { blocked[action] = YES; hl2ios_jogo_sacar(); return; }
+         if (!down && blocked[action]) { blocked[action] = NO; return; }
+     }

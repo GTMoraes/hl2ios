@@ -529,7 +529,7 @@ void hl2ios_toque_executar(int i, int apertou) {
     const Pers *p = &salvos.pers[i];
     const Modelo *m = &kModelos[p->modelo];
     if (m->tipo == TIPO_GUARDAR) {
-        if (apertou) hl2ios_jogo_guardar();
+        hl2ios_jogo_botao_guardar(apertou);
     } else if (m->tipo == TIPO_ARMA) {
         if (apertou) {
             hl2ios_jogo_selecao();
@@ -980,9 +980,9 @@ typedef void (^HL2EdAcao)(void);
     } else {
         if (campo.isEditing) [campo resignFirstResponder];
         const Modelo *m = &kModelos[p->modelo];
-        campo.text = m->tipo == TIPO_GUARDAR ? @"impulse 200" : @(m->comando);
+        campo.text = m->tipo == TIPO_GUARDAR ? @"global_set (toque) / impulse 200 (segurar)" : @(m->comando);
         campoDica.text = m->tipo == TIPO_GUARDAR
-            ? @"Guarda e saca a arma. Guardada, o tiro fica travado; tocar no tiro saca a arma."
+            ? @"Toque: abaixa e levanta a arma. Segure: guarda e saca. Guardada, o tiro fica travado; tocar no tiro saca a arma."
             : @"Troca de arma. Com a arma guardada, também a saca.";
     }
 }

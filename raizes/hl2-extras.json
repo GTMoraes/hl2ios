@@ -96,5 +96,6 @@
   "materialsystem.so:code:0xaf44a",
   "materialsystem.so:code:0xaf455",
   "materialsystem.so:code:0xaf460",
-  "materialsystem.so:code:0xaf46b"
+  "materialsystem.so:code:0xaf46b",
+  "server.so:code:0x81b4e0"
 ]
