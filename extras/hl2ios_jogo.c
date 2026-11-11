@@ -16,6 +16,10 @@
 // (m_hActiveWeapon), os efeitos dela (m_fEffects, bit EF_NODRAW), o veículo (m_hVehicle) e o
 // estado de vida (m_lifeState). Os deslocamentos vêm das tabelas de rede do jogo (VClient017,
 // GetAllClasses); se a busca falhar, valem os achados no client.so do depot fixado.
+//
+// FOV da arma: viewmodel_fov, ajustado no editor por arma (hl2ios_toque.m) e posto direto na
+// variável (ICvar, sem passar pelo console, que pede sv_cheats). O jogo a devolve ao padrão
+// quando sv_cheats volta a 0; ela é posta de novo na leitura seguinte (50 ms).
 #include <TargetConditionals.h>
 #if TARGET_OS_IPHONE
 #include <SDL.h>
@@ -24,6 +28,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "game_ios.h"
+#include "hl2ios_arma.h"
 #include "hl2ios_jogo.h"
 #include "modules.h"
 #include "rt.h"
@@ -310,6 +315,48 @@ static void atualizar(CPU *c, uint64_t agora) {
     }
 }
 
+// ---- FOV da arma ----
+
+static uint32_t fov_cv;          // ConVar viewmodel_fov (0: ainda não achada)
+static int fov_busca;            // tentativas de achar
+static char fov_jogo[16];        // valor do jogo antes do app mexer
+static int fov_nosso;            // o app pôs um valor e precisa devolver o do jogo
+static char fov_avisado[16];
+
+static void ajustar_fov(CPU *c) {
+    if (!fov_cv) {
+        if (fov_busca > 20) return;
+        ++fov_busca;
+        fov_cv = rt_ios_find_convar(c, "viewmodel_fov");
+        if (!fov_cv) {
+            if (fov_busca > 20) fprintf(stderr, "[hl2ios] arma: viewmodel_fov não achada, FOV da arma fica o do jogo\n");
+            return;
+        }
+    }
+    float frente, lado, altura, fov;
+    hl2ios_toque_arma(hl2ios_arma_classe(), &frente, &lado, &altura, &fov);
+    const char *agora = rt_ios_convar_string(fov_cv);
+    if (fov > 0) {
+        char quero[16];
+        snprintf(quero, sizeof(quero), "%g", (double)fov);
+        if (!strcmp(agora, quero)) return;
+        if (!fov_nosso) {
+            snprintf(fov_jogo, sizeof(fov_jogo), "%s", agora[0] ? agora : "54");
+            fov_nosso = 1;
+        }
+        rt_ios_set_convar(c, fov_cv, quero);
+        if (strcmp(fov_avisado, quero)) {
+            snprintf(fov_avisado, sizeof(fov_avisado), "%s", quero);
+            fprintf(stderr, "[hl2ios] arma: viewmodel_fov %s (jogo: %s)\n", rt_ios_convar_string(fov_cv), fov_jogo);
+        }
+    } else if (fov_nosso) {
+        fov_nosso = 0;
+        fov_avisado[0] = 0;
+        rt_ios_set_convar(c, fov_cv, fov_jogo);
+        fprintf(stderr, "[hl2ios] arma: viewmodel_fov de volta a %s\n", rt_ios_convar_string(fov_cv));
+    }
+}
+
 static uint64_t selecao_ate;   // seleção de arma aberta pelo HUD: o tiro confirma
 static int visto_bloqueia, visto_guardada;
 
@@ -335,6 +382,7 @@ void hl2ios_jogo_poll(void) {
     if (agora >= proxima_leitura) {
         proxima_leitura = agora + 50;
         atualizar(c, agora);
+        ajustar_fov(c);
     }
     if (pedido) tratar_pedido(c, agora);
     conferir_versao();

@@ -1,0 +1,30 @@
+--- a/tools/lift.py
++++ b/tools/lift.py
+@@ -1277,6 +1277,12 @@
+     # partie, sv.edicts est déjà à zéro alors que des entités appellent encore
+     # NetworkStateChanged : l'adresse calculée part dans le vide (voir native.c).
+     ('engine.so', 0x586930): ('rt_native_change_accessor', 'CHANGE_ACCESSOR', CHANGE_ACCESSOR),
++    # hl2ios : CBaseHLCombatWeapon::AddViewmodelBob (client.so de hl2_complete, depot 224), le
++    # balancement de toutes les armes de HL2 ; la version native appelle l'originale puis déplace
++    # l'arme selon l'éditeur des commandes (runtime/ios/hl2ios_arma.c).
++    ('client.so', 0x2234c0): ('hl2ios_native_bob_da_arma', 'HL2IOS_ARMA',
++                              '5589e557568d55dc53e8(.{8})81c3(.{8})83ec2c8b7d146a008b7510528d55d05257e8(.{8})'
++                              '8b45088b10890424ff9278050000'),
+ }
+ 
+ 
+--- a/runtime/ios/touch_controls.m
++++ b/runtime/ios/touch_controls.m
+@@ -432,6 +432,12 @@
+ - (void)openEditor {
+     [self tapKey:SDL_SCANCODE_ESCAPE];
+     __weak P2TouchControls *weakSelf = self;
++    // Réglage de l'arme (hl2ios_toque.m) : le jeu tourne derrière (menu de pause fermé), puis
++    // le menu revient ; Échap seulement si l'état n'est pas déjà le bon.
++    hl2ios_toque_editor_pausa(^(int pausar) {
++        P2TouchControls *s = weakSelf;
++        if (s && (rt_ios_game_ui_visible() != 0) != (pausar != 0)) [s tapKey:SDL_SCANCODE_ESCAPE];
++    });
+     hl2ios_toque_editor_abrir(^(int salvou) {
+         P2TouchControls *s = weakSelf;
+         if (!s) return;

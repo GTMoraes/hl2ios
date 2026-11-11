@@ -14,6 +14,9 @@
 // última arma) ou de um comando do console digitado, com ícone e cor escolhidos. O que ele faz
 // roda em hl2ios_jogo.c.
 //
+// Arma ajusta a posição (frente, lado, altura) e o FOV da arma na mão, por arma, com o jogo
+// rodando atrás para ver o resultado ao vivo (hl2ios_arma.c e hl2ios_jogo.c aplicam).
+//
 // A janela não vira a principal (o SDL continua com o foco), e o laço de eventos do SDL não
 // deixa o UIKit desenhar sozinho: como o touch_controls.m, o editor termina cada mudança com
 // [CATransaction flush], e um observador do laço faz o mesmo a cada passagem.
@@ -23,6 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "game_ios.h"
+#include "hl2ios_arma.h"
 #include "hl2ios_jogo.h"
 #include "hl2ios_toque.h"
 
@@ -118,6 +122,29 @@ typedef struct {
 
 static const float kTamanhoPers = 54;
 
+// ---- ajuste da arma na mão ----
+
+enum { MAX_ARMAS = 32, CLASSE = 48 };
+typedef struct {
+    char classe[CLASSE];          // nome de rede da arma ("CWeaponSMG1")
+    float frente, lado, altura;   // unidades do jogo, nos eixos da câmera
+    float fov;                    // FOV da arma (0: o do jogo)
+} ArmaAj;
+static const float kDeslocMax = 12, kFovMin = 40, kFovMax = 110, kFovJogo = 54;
+
+// Nomes das armas no editor (as que não estão aqui aparecem pelo nome de rede).
+static const struct { const char *classe, *nome; } kNomesArmas[] = {
+    {"CWeaponCrowbar", "Pé de cabra"},    {"CWeaponPhysCannon", "Arma de gravidade"},
+    {"CWeaponPistol", "Pistola"},         {"CWeapon357", "Revólver .357"},
+    {"CWeaponSMG1", "SMG"},               {"CWeaponAR2", "Rifle de pulso (AR2)"},
+    {"CWeaponShotgun", "Escopeta"},       {"CWeaponCrossbow", "Besta"},
+    {"CWeaponFrag", "Granada"},           {"CWeaponRPG", "Lança-foguetes (RPG)"},
+    {"CWeaponBugBait", "Feromônio"},      {"CWeaponAnnabelle", "Annabelle"},
+    {"CWeaponStunStick", "Cassetete"},    {"CWeaponStunStickPlayer", "Cassetete"},
+    {"CWeaponAlyxGun", "Arma da Alyx"},   {"CWeaponHopwire", "Hopwire"},
+    {"CWeapon_SLAM", "SLAM"},
+};
+
 // ---- ajustes ----
 
 static const float kTamanhoMin = 28, kTamanhoMax = 140;
@@ -135,6 +162,9 @@ typedef struct {
     float opacidade, sticks;
     Pers pers[MAX_PERS];   // botões criados, na ordem em que foram criados
     int nPers;
+    ArmaAj armas[MAX_ARMAS];   // ajuste por arma
+    int nArmas;
+    ArmaAj geral;              // armas sem ajuste próprio (Copiar para todas)
 } Ajustes;
 
 static void ajuste_padrao(Ajuste *j) {
@@ -162,7 +192,32 @@ static int ajustes_iguais(const Ajustes *a, const Ajustes *b) {
             x->fx != y->fx || x->fy != y->fy || x->tamanho != y->tamanho || x->alternar != y->alternar ||
             x->mirar != y->mirar) return 0;
     }
+    if (a->nArmas != b->nArmas) return 0;
+    for (int i = 0; i <= a->nArmas; ++i) {
+        const ArmaAj *x = i < a->nArmas ? &a->armas[i] : &a->geral, *y = i < b->nArmas ? &b->armas[i] : &b->geral;
+        if (strcmp(x->classe, y->classe) || x->frente != y->frente || x->lado != y->lado || x->altura != y->altura ||
+            x->fov != y->fov) return 0;
+    }
     return 1;
+}
+
+// Ajuste desta arma: o dela, ou o geral.
+static const ArmaAj *arma_de(const Ajustes *a, const char *classe) {
+    if (classe && classe[0])
+        for (int i = 0; i < a->nArmas; ++i)
+            if (!strcmp(a->armas[i].classe, classe)) return &a->armas[i];
+    return &a->geral;
+}
+// O dela, criado a partir do geral se ainda não existe (NULL sem arma ou sem espaço).
+static ArmaAj *arma_propria(Ajustes *a, const char *classe) {
+    if (!classe || !classe[0]) return NULL;
+    for (int i = 0; i < a->nArmas; ++i)
+        if (!strcmp(a->armas[i].classe, classe)) return &a->armas[i];
+    if (a->nArmas == MAX_ARMAS) return NULL;
+    ArmaAj *j = &a->armas[a->nArmas++];
+    *j = a->geral;
+    snprintf(j->classe, sizeof(j->classe), "%s", classe);
+    return j;
 }
 
 static double limitar(double v, double lo, double hi) {
@@ -233,6 +288,15 @@ static int sim_nao(id v, int padrao) {
     return [v isKindOfClass:NSNumber.class] ? ([(NSNumber *)v boolValue] ? 1 : 0) : padrao;
 }
 
+static void arma_ler(id v, ArmaAj *j) {
+    if (![v isKindOfClass:NSDictionary.class]) return;
+    NSDictionary *d = v;
+    j->frente = (float)numero(d[@"frente"], 0, -kDeslocMax, kDeslocMax);
+    j->lado = (float)numero(d[@"lado"], 0, -kDeslocMax, kDeslocMax);
+    j->altura = (float)numero(d[@"altura"], 0, -kDeslocMax, kDeslocMax);
+    j->fov = [d[@"fov"] isKindOfClass:NSNumber.class] ? (float)numero(d[@"fov"], 0, kFovMin, kFovMax) : 0;
+}
+
 static void carregar(void) {
     if (carregados) return;
     carregados = 1;
@@ -295,8 +359,21 @@ static void carregar(void) {
             p->mirar = sim_nao(d[@"mirar"], 0);
         }
     }
-    fprintf(stderr, "[hl2ios] toque: hl2-toque.json com %d botões ajustados e %d criados, opacidade %.2f, sticks %.2f\n",
-            lidos, salvos.nPers, salvos.opacidade, salvos.sticks);
+    salvos.geral.classe[0] = 0;
+    arma_ler(raiz[@"arma-geral"], &salvos.geral);
+    NSDictionary *armas = raiz[@"armas"];
+    if ([armas isKindOfClass:NSDictionary.class]) {
+        for (NSString *nome in [armas.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+            if (salvos.nArmas == MAX_ARMAS || ![nome isKindOfClass:NSString.class] || !nome.length ||
+                [nome lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >= CLASSE) continue;
+            ArmaAj *j = &salvos.armas[salvos.nArmas++];
+            memset(j, 0, sizeof(*j));
+            snprintf(j->classe, sizeof(j->classe), "%s", nome.UTF8String);
+            arma_ler(armas[nome], j);
+        }
+    }
+    fprintf(stderr, "[hl2ios] toque: hl2-toque.json com %d botões ajustados, %d criados e %d armas ajustadas, opacidade "
+            "%.2f, sticks %.2f\n", lidos, salvos.nPers, salvos.nArmas, salvos.opacidade, salvos.sticks);
 }
 
 // Texto em UTF-8 para NSString; "" se não for UTF-8 válido (nunca nil num dicionário).
@@ -307,6 +384,16 @@ static NSString *texto(const char *c) {
 
 static double arredondar(double v, double passo) {
     return round(v / passo) * passo;
+}
+
+static NSDictionary *arma_dic(const ArmaAj *j) {
+    NSMutableDictionary *d = [@{
+        @"frente": @(arredondar(j->frente, .1)),
+        @"lado": @(arredondar(j->lado, .1)),
+        @"altura": @(arredondar(j->altura, .1)),
+    } mutableCopy];
+    if (j->fov > 0) d[@"fov"] = @(arredondar(j->fov, .1));
+    return d;
 }
 
 // Grava os ajustes; a versão anterior do arquivo fica em hl2-toque-anterior.json.
@@ -341,8 +428,12 @@ static BOOL gravar(const Ajustes *a) {
         if (p->mirar) d[@"mirar"] = @YES;
         [criados addObject:d];
     }
+    NSMutableDictionary *armas = [NSMutableDictionary dictionary];
+    for (int i = 0; i < a->nArmas; ++i) armas[texto(a->armas[i].classe)] = arma_dic(&a->armas[i]);
     NSDictionary *raiz = @{
-        @"versao": @2,
+        @"versao": @3,
+        @"armas": armas,
+        @"arma-geral": arma_dic(&a->geral),
         @"opacidade": @(arredondar(a->opacidade, .01)),
         @"sticks": @(arredondar(a->sticks, .01)),
         @"botoes": botoes,
@@ -379,6 +470,18 @@ float hl2ios_toque_opacidade(void) {
 float hl2ios_toque_escala_sticks(void) {
     carregar();
     return salvos.sticks;
+}
+
+// O que está em edição enquanto o editor está aberto (o jogo mostra ao vivo), o gravado fora dele.
+static const Ajustes *ativos;
+
+void hl2ios_toque_arma(const char *classe, float *frente, float *lado, float *altura, float *fov) {
+    carregar();
+    const ArmaAj *j = arma_de(ativos ? ativos : &salvos, classe);
+    *frente = j->frente;
+    *lado = j->lado;
+    *altura = j->altura;
+    *fov = j->fov;
 }
 
 int hl2ios_toque_personalizados(void) {
@@ -444,6 +547,7 @@ void hl2ios_toque_executar(int i, int apertou) {
 
 static void editor_fechar(int salvou);
 static UIWindow *janela;
+static void (^ao_pausar)(int pausar);   // touch_controls.m: fecha (0) ou abre (1) o menu de pausa
 
 // O campo do comando só recebe o teclado na janela principal: o editor a pega enquanto o campo
 // está em uso e a devolve (à do SDL) quando ele termina ou o editor fecha.
@@ -574,6 +678,14 @@ typedef void (^HL2EdAcao)(void);
     NSMutableArray<UIButton *> *bModelos, *bIcones, *bCores;
     UITextField *campo;
     UIButton *bPronto;
+    BOOL modoArma;                  // ajuste da arma: só a barra, com o jogo rodando atrás
+    UIButton *bArma;
+    UIView *barra;
+    UILabel *armaNome, *rFrente, *rLado, *rAltura, *rFov;
+    UISlider *sFrente, *sLado, *sAltura, *sFov;
+    UIButton *bPadraoArma, *bCopiarTodas, *bVoltar;
+    NSTimer *relogio;               // acompanha a arma na mão
+    NSString *classeVista;
     UIView *confirma, *caixa;
     UILabel *confirmaTexto;
     UIButton *confirmaSim, *confirmaNao;
@@ -584,6 +696,7 @@ typedef void (^HL2EdAcao)(void);
     if ((self = [super initWithFrame:frame])) {
         carregar();
         trabalho = salvos;
+        ativos = &trabalho;   // o jogo mostra a arma com o que está em edição
         selecionado = -1;
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:.4];
         self.multipleTouchEnabled = YES;
@@ -621,6 +734,7 @@ typedef void (^HL2EdAcao)(void);
         [self recriarPersonalizados];
         [self montarPainel];
         [self montarFolha];
+        [self montarBarra];
         [self montarConfirmacao];
         UIPinchGestureRecognizer *pinca = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(pinca:)];
         [self addGestureRecognizer:pinca];
@@ -700,6 +814,7 @@ typedef void (^HL2EdAcao)(void);
     sSticks = [self deslizador:kSticksMin max:kSticksMax acao:@selector(mudouSticks:)];
     // linha 2
     bNovo = [self botao:@"Novo botão" acao:@selector(tocouNovo) destaque:NO em:painel];
+    bArma = [self botao:@"Arma" acao:@selector(tocouArma) destaque:NO em:painel];
     bPadraoDeste = [self botao:@"Padrão deste" acao:@selector(tocouPadraoDeste) destaque:NO em:painel];
     bRestaurar = [self botao:@"Restaurar tudo" acao:@selector(tocouRestaurar) destaque:NO em:painel];
     bMoverPainel = [self botao:@"Painel embaixo" acao:@selector(tocouMoverPainel) destaque:NO em:painel];
@@ -953,6 +1068,160 @@ typedef void (^HL2EdAcao)(void);
     [self redesenhar];
 }
 
+// ---- ajuste da arma ----
+- (UILabel *)rotuloBarra:(NSString *)t {
+    return [self rotulo:t tamanho:13 peso:UIFontWeightRegular em:barra];
+}
+- (UISlider *)deslizadorBarra:(float)min max:(float)max {
+    UISlider *s = [[UISlider alloc] init];
+    s.minimumValue = min;
+    s.maximumValue = max;
+    s.minimumTrackTintColor = laranja();
+    [s addTarget:self action:@selector(mudouArma:) forControlEvents:UIControlEventValueChanged];
+    [barra addSubview:s];
+    return s;
+}
+- (void)montarBarra {
+    barra = [[UIView alloc] init];
+    barra.backgroundColor = [UIColor colorWithWhite:.05 alpha:.8];
+    barra.layer.cornerRadius = 12;
+    barra.hidden = YES;
+    [self addSubview:barra];
+    armaNome = [self rotulo:@"" tamanho:15 peso:UIFontWeightBold em:barra];
+    armaNome.textColor = laranja();
+    rFrente = [self rotuloBarra:@""];
+    sFrente = [self deslizadorBarra:-kDeslocMax max:kDeslocMax];
+    rLado = [self rotuloBarra:@""];
+    sLado = [self deslizadorBarra:-kDeslocMax max:kDeslocMax];
+    rAltura = [self rotuloBarra:@""];
+    sAltura = [self deslizadorBarra:-kDeslocMax max:kDeslocMax];
+    rFov = [self rotuloBarra:@""];
+    sFov = [self deslizadorBarra:kFovMin max:kFovMax];
+    bPadraoArma = [self botao:@"Padrão desta arma" acao:@selector(tocouPadraoArma) destaque:NO em:barra];
+    bCopiarTodas = [self botao:@"Copiar para todas" acao:@selector(tocouCopiarTodas) destaque:NO em:barra];
+    bVoltar = [self botao:@"Voltar ao editor" acao:@selector(tocouVoltarEditor) destaque:YES em:barra];
+}
+- (void)disporBarra:(CGRect)a {
+    const CGFloat margem = 12, linha = 34;
+    NSArray<UIView *> *v1 = @[armaNome, rFrente, sFrente, rLado, sLado, rAltura, sAltura];
+    const CGFloat w1[] = {150, 88, 104, 76, 104, 84, 104};
+    CGFloat fim1 = enfileirar(v1, w1, margem, margem, linha);
+    NSArray<UIView *> *v2 = @[rFov, sFov, bPadraoArma, bCopiarTodas, bVoltar];
+    const CGFloat w2[] = {116, 150, 150, 142, 140};
+    CGFloat fim2 = enfileirar(v2, w2, margem, margem + linha + 10, linha);
+    CGFloat largura = MAX(fim1, fim2) - 8 + margem, altura = margem + linha + 10 + linha + margem;
+    CGFloat escala = MIN(1, (a.size.width - 12) / largura);
+    barra.transform = CGAffineTransformIdentity;
+    barra.bounds = CGRectMake(0, 0, largura, altura);
+    // No alto: a arma fica embaixo, à direita.
+    barra.center = CGPointMake(CGRectGetMidX(a), CGRectGetMinY(a) + 6 + altura * escala / 2);
+    barra.transform = CGAffineTransformMakeScale(escala, escala);
+}
+static NSString *nome_da_arma(NSString *classe) {
+    if (!classe.length) return @"Sem arma na mão";
+    for (size_t i = 0; i < sizeof(kNomesArmas) / sizeof(*kNomesArmas); ++i)
+        if ([classe isEqualToString:@(kNomesArmas[i].classe)]) return @(kNomesArmas[i].nome);
+    return classe;
+}
+static NSString *numero_texto(NSString *nome, float v) {
+    return [NSString stringWithFormat:@"%@ %@%.1f", nome, v > 0 ? @"+" : @"", (double)v];
+}
+// Rótulos e controles com o ajuste da arma na mão; `controles` também move os controles
+// (não durante um arrasto, que já os move).
+- (void)atualizarBarra:(BOOL)controles {
+    const char *classe = hl2ios_arma_classe();
+    const ArmaAj *j = arma_de(&trabalho, classe);
+    BOOL tem = classe[0] != 0;
+    armaNome.text = nome_da_arma(texto(classe));
+    for (UIControl *c in @[sFrente, sLado, sAltura, sFov, bPadraoArma, bCopiarTodas]) {
+        c.enabled = tem;
+        c.alpha = tem ? 1 : .4;
+    }
+    rFrente.text = numero_texto(@"Frente", j->frente);
+    rLado.text = numero_texto(@"Lado", j->lado);
+    rAltura.text = numero_texto(@"Altura", j->altura);
+    rFov.text = j->fov > 0 ? [NSString stringWithFormat:@"FOV da arma %.0f", (double)j->fov]
+                           : [NSString stringWithFormat:@"FOV da arma %.0f (jogo)", (double)kFovJogo];
+    if (controles) {
+        sFrente.value = j->frente;
+        sLado.value = j->lado;
+        sAltura.value = j->altura;
+        sFov.value = j->fov > 0 ? j->fov : kFovJogo;
+    }
+}
+- (void)acompanharArma {
+    NSString *classe = texto(hl2ios_arma_classe());
+    if ([classe isEqualToString:classeVista ?: @""]) return;
+    classeVista = classe;
+    [self atualizarBarra:YES];
+    [self redesenhar];
+}
+- (void)tocouArma {
+    modoArma = YES;
+    classeVista = nil;
+    selecionado = -1;
+    arrasto = nil;
+    if (ao_pausar) ao_pausar(0);
+    __weak HL2EdTela *fraca = self;
+    relogio = [NSTimer scheduledTimerWithTimeInterval:.25 repeats:YES block:^(NSTimer *t) {
+        (void)t;
+        [fraca acompanharArma];
+    }];
+    [self acompanharArma];
+    [self atualizarPainel];
+    [self redesenhar];
+}
+- (void)dealloc {
+    [relogio invalidate];
+}
+- (void)tocouVoltarEditor {
+    modoArma = NO;
+    [relogio invalidate];
+    relogio = nil;
+    if (ao_pausar) ao_pausar(1);
+    [self redesenhar];
+}
+- (void)mudouArma:(UISlider *)s {
+    ArmaAj *j = arma_propria(&trabalho, hl2ios_arma_classe());
+    if (!j) return;
+    float v = (float)(s == sFov ? round(s.value) : round(s.value * 2) / 2);   // passos de 1 e de 0,5
+    if (s == sFrente) j->frente = v;
+    else if (s == sLado) j->lado = v;
+    else if (s == sAltura) j->altura = v;
+    else j->fov = v;
+    [self atualizarBarra:NO];
+    [self redesenhar];
+}
+- (void)tocouPadraoArma {
+    ArmaAj *j = arma_propria(&trabalho, hl2ios_arma_classe());
+    if (!j) return;
+    j->frente = j->lado = j->altura = j->fov = 0;
+    [self atualizarBarra:YES];
+    [self redesenhar];
+}
+- (void)copiarParaTodas {
+    const ArmaAj *j = arma_de(&trabalho, hl2ios_arma_classe());
+    ArmaAj modelo = *j;
+    for (int i = 0; i < trabalho.nArmas; ++i) {
+        trabalho.armas[i].frente = modelo.frente;
+        trabalho.armas[i].lado = modelo.lado;
+        trabalho.armas[i].altura = modelo.altura;
+        trabalho.armas[i].fov = modelo.fov;
+    }
+    modelo.classe[0] = 0;
+    trabalho.geral = modelo;
+    [self atualizarBarra:YES];
+    [self redesenhar];
+}
+- (void)tocouCopiarTodas {
+    __weak HL2EdTela *fraca = self;
+    [self perguntar:[NSString stringWithFormat:@"Tem certeza? A posição e o FOV de \u201c%@\u201d vão para todas as "
+                                               @"outras armas, inclusive as já ajustadas. Só é gravado quando você "
+                                               @"tocar em Concluir.", armaNome.text]
+                sim:@"Copiar"
+               acao:^{ [fraca copiarParaTodas]; }];
+}
+
 // ---- disposição ----
 - (CGRect)area {
     return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets);
@@ -1024,11 +1293,19 @@ typedef void (^HL2EdAcao)(void);
         b.layer.borderColor = (b == escolhido ? laranja() : [UIColor colorWithWhite:1 alpha:.45]).CGColor;
         b.layer.borderWidth = b == escolhido ? 3 : 2;
     }
+    // Ajuste da arma: some tudo menos a barra, e o fundo fica claro para ver a arma.
+    self.backgroundColor = [UIColor colorWithWhite:0 alpha:modoArma ? 0 : .4];
+    for (HL2EdBotao *b in botoes) b.hidden = modoArma;
+    painel.hidden = divisaTexto.hidden = modoArma;
+    divisa.hidden = anelSticks[0].hidden = anelSticks[1].hidden = modoArma;
+    barra.hidden = !modoArma;
     [self bringSubviewToFront:painel];
     [self bringSubviewToFront:folha];
+    [self bringSubviewToFront:barra];
     [self bringSubviewToFront:confirma];
     [self disporPainel:a];
     [self disporFolha:a];
+    [self disporBarra:a];
     [self disporConfirmacao];
 }
 // Coloca as vistas lado a lado a partir de x, numa linha de altura h; devolve o x final.
@@ -1054,8 +1331,8 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
         const CGFloat w[] = {250, 70, 120, 46, 120};
         fim1 = enfileirar(v, w, margem, margem, linha);
     }
-    NSArray<UIView *> *v2 = @[bNovo, bPadraoDeste, bRestaurar, bMoverPainel, bCancelar, bConcluir];
-    const CGFloat w2[] = {104, 108, 120, 128, 92, 100};
+    NSArray<UIView *> *v2 = @[bNovo, bArma, bPadraoDeste, bRestaurar, bMoverPainel, bCancelar, bConcluir];
+    const CGFloat w2[] = {104, 70, 108, 120, 128, 92, 100};
     CGFloat fim2 = enfileirar(v2, w2, margem, margem + linha + 10, linha);
     CGFloat largura = MAX(fim1, fim2) - 8 + margem, altura = margem + linha + 10 + linha + margem;
     // Cabe na zona segura: se não couber, o painel inteiro encolhe.
@@ -1121,7 +1398,7 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     (void)event;
-    if (!confirma.hidden || !folha.hidden) return;
+    if (!confirma.hidden || !folha.hidden || modoArma) return;
     BOOL mudou = NO;
     for (UITouch *t in touches) {
         if (arrasto) break;
@@ -1175,7 +1452,7 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 }
 - (void)pinca:(UIPinchGestureRecognizer *)g {
     HL2EdBotao *b = [self escolhido];
-    if (!b || !confirma.hidden || !folha.hidden) return;
+    if (!b || !confirma.hidden || !folha.hidden || modoArma) return;
     if (g.state == UIGestureRecognizerStateBegan) tamanhoBase = b.tamanho;
     else if (g.state != UIGestureRecognizerStateChanged) return;
     arrasto = nil;
@@ -1273,8 +1550,8 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 - (void)tocouRestaurar {
     __weak HL2EdTela *fraca = self;
     [self perguntar:@"Tem certeza? Todos os botões voltam à posição, ao tamanho e às opções originais, a "
-                    @"opacidade e os sticks voltam ao normal, e os botões criados por você são apagados. Só é "
-                    @"gravado quando você tocar em Concluir."
+                    @"opacidade e os sticks voltam ao normal, a posição e o FOV das armas voltam aos do jogo, e "
+                    @"os botões criados por você são apagados. Só é gravado quando você tocar em Concluir."
                 sim:@"Restaurar"
                acao:^{ [fraca restaurarTudo]; }];
 }
@@ -1350,12 +1627,17 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 static void (^ao_fechar)(int);
 static CFRunLoopObserverRef observador;
 
+void hl2ios_toque_editor_pausa(void (^pausar)(int pausar)) {
+    ao_pausar = [pausar copy];
+}
+
 static void editor_fechar(int salvou) {
     if (!janela) return;
     // Depois da ação do botão que pediu para fechar, não no meio dela.
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!janela) return;
         devolver_chave();
+        ativos = NULL;   // de volta ao gravado
         janela.hidden = YES;
         janela.rootViewController = nil;
         janela = nil;

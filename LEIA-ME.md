@@ -72,6 +72,9 @@ O projeto foi feito para um Mac com o iPhone no cabo. Aqui não há Mac, então:
    ela está guardada. Detalhes em "Botões criados" e "Guardar arma".
 8. **Sair sem falha** (`patches/0006`, `extras/hl2ios_sair.m`): ao sair pelo menu do jogo, o app vai
    para o fundo com a animação do sistema e só depois fecha.
+9. **Posição e FOV da arma** (`patches/0007`, `extras/hl2ios_arma.c`): o balanço da arma ao andar
+   (`AddViewmodelBob` do `client.so`) passa por uma função do app, que roda a original e depois
+   desloca a arma. Detalhes em "Posição e FOV da arma".
 
 O binário de Mac que vem esquecido no depot (`bin/ffmpegsumo.so`) é tirado do app: binário Mach-O
 solto é recusado no envio, e o jogo não usa esse arquivo.
@@ -209,6 +212,25 @@ O `impulse 200` só vale com `sv_cheats 1`. O app liga o `sv_cheats` só pelo in
 processa o comando e volta a 0 em seguida (se já estava em 1, não mexe). O registro mostra tudo
 nas linhas `[hl2ios] arma:`.
 
+### Posição e FOV da arma
+
+**Arma** (no painel) mostra só uma barra no alto, fecha o menu de pausa e deixa o jogo rodando
+atrás, para ver a arma ao vivo, balançando. Os controles de toque ficam bloqueados enquanto isso:
+faça o ajuste num lugar sem inimigo.
+
+- **Frente** (+ afasta, - aproxima), **Lado** (+ direita) e **Altura** (+ sobe): de -12 a +12
+  unidades do jogo, em passos de 0,5.
+- **FOV da arma:** de 40 a 110 (o do jogo é 54). Vale só para a arma, não para o mundo.
+- Cada arma guarda o seu ajuste; a barra mostra a que está na mão. Troque de arma (pelo jogo ou
+  pelos botões) com a barra aberta para ajustar outra.
+- **Padrão desta arma** volta a arma na mão para o do jogo. **Copiar para todas** leva o ajuste
+  dela para todas as outras, inclusive as que ainda não foram ajustadas (pergunta antes).
+- **Voltar ao editor** pausa o jogo de novo. Como o resto, só é gravado em Concluir.
+
+O FOV vai direto na variável `viewmodel_fov` do jogo, sem `sv_cheats`. Quando o jogo a devolve ao
+padrão (por exemplo, depois de guardar a arma), o app põe de novo em até 50 ms. O registro mostra
+a arma na mão e o FOV nas linhas `[hl2ios] arma`.
+
 ### Arquivo dos ajustes
 
 Os ajustes e os botões criados ficam em `hl2-toque.json`, na pasta do app no Arquivos, e a versão anterior em
@@ -247,6 +269,9 @@ linha com "target not recompiled" e o endereço.
   mas o tiro não trava (o registro diz "leitura não confere").
 - **Controle ou teclado físico** não passam pela trava do tiro.
 - **Sair:** o app usa a mesma chamada do `hlios` para ir ao fundo (`suspend`, não pública).
+- **Posição da arma:** a troca da função só acontece se os bytes dela no `client.so` forem os do
+  depot 224. Num depot diferente o build avisa ("remplacement natif ... ignoré") e a arma fica na
+  posição do jogo; o FOV continua valendo. `P2_NATIVE_HL2IOS_ARMA=0` desliga a troca.
 
 ## Atualizar
 

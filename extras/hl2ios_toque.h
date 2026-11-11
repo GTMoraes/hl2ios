@@ -23,6 +23,10 @@ float hl2ios_toque_escala_sticks(void);
 // os ajustes mudaram e foram gravados.
 void hl2ios_toque_editor_abrir(void (^fechou)(int salvou));
 
+// Como o editor fecha (0) ou abre (1) o menu de pausa do jogo: o ajuste da arma mostra o jogo
+// rodando atrás. Chamado pelo touch_controls.m antes de abrir o editor.
+void hl2ios_toque_editor_pausa(void (^pausar)(int pausar));
+
 // ---- botões criados no editor (até 24: ações RT_TOUCH_CUSTOM a RT_TOUCH_CUSTOM_LAST) ----
 
 // Quantos botões criados existem.
