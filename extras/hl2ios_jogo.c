@@ -27,12 +27,17 @@
 // no tiro secundário só a levanta, sem atirar (a camada de toque engole o toque); o recarregar
 // recarrega na hora e a arma volta abaixada; os botões de arma a levantam.
 //
-// Munição de reserva: o máximo que o jogador carrega de cada munição vem das variáveis
-// sk_max_* (sk_max_pistol, sk_max_grenade...), lidas a cada uso (CAmmoDef::MaxCarry) e
-// postas pelo skill.cfg do jogo. Elas são só FCVAR_REPLICATED (sem trapaça: o sv_cheats não as
-// devolve). Uma vez por segundo o app confere cada uma: se o valor não é o que ele pôs, é o do
-// jogo (skill.cfg rodou de novo, jogo novo, dificuldade trocada), e o app põe o triplo. O
-// carregador de cada arma não muda.
+// Munição de reserva e escopeta: variáveis do jogo multiplicadas pelo app.
+// - O máximo que o jogador carrega de cada munição vem das variáveis sk_max_* (sk_max_pistol,
+//   sk_max_grenade...), lidas a cada uso (CAmmoDef::MaxCarry): o app põe o triplo. O carregador
+//   de cada arma não muda.
+// - Escopeta: sk_plr_num_shotgun_pellets (bagos do tiro normal, 7) vai ao dobro e
+//   sk_plr_dmg_buckshot (dano de cada bago do jogador, 8) a 3/4: o tiro cheio fica com 1,5 vez o
+//   dano (14 x 6 = 84 contra 7 x 8 = 56). O dano dos NPCs (sk_npc_dmg_buckshot) não muda.
+// Todas são só FCVAR_REPLICATED (sem trapaça: o sv_cheats não as devolve), postas pelo
+// skill.cfg do jogo ou com o valor padrão delas. Uma vez por segundo o app confere cada uma: se o
+// valor não é o que ele pôs, é o do jogo (skill.cfg rodou de novo, jogo novo, dificuldade
+// trocada), e o app põe o valor multiplicado.
 //
 // FOV da arma: viewmodel_fov, ajustado no editor por arma (hl2ios_toque.m) e posto direto na
 // variável (ICvar, sem passar pelo console, que pede sv_cheats). O jogo a devolve ao padrão
@@ -407,10 +412,16 @@ static void ajustar_fov(CPU *c) {
 
 // ---- munição de reserva ----
 
-enum { MUNICAO_FATOR = 3 };
-static const char *const kMunicao[] = {
-    "sk_max_pistol", "sk_max_357", "sk_max_smg1", "sk_max_smg1_grenade", "sk_max_ar2",
-    "sk_max_ar2_altfire", "sk_max_buckshot", "sk_max_crossbow", "sk_max_rpg_round", "sk_max_grenade",
+#define MUNICAO_FATOR 3.0    // munição de reserva
+#define BAGOS_FATOR 2.0      // bagos do tiro normal da escopeta
+#define DANO_TIRO_CHEIO 1.5  // dano do tiro normal cheio da escopeta, em relação ao original
+static const struct { const char *nome; double fator; } kMunicao[] = {
+    {"sk_max_pistol", MUNICAO_FATOR}, {"sk_max_357", MUNICAO_FATOR}, {"sk_max_smg1", MUNICAO_FATOR},
+    {"sk_max_smg1_grenade", MUNICAO_FATOR}, {"sk_max_ar2", MUNICAO_FATOR}, {"sk_max_ar2_altfire", MUNICAO_FATOR},
+    {"sk_max_buckshot", MUNICAO_FATOR}, {"sk_max_crossbow", MUNICAO_FATOR}, {"sk_max_rpg_round", MUNICAO_FATOR},
+    {"sk_max_grenade", MUNICAO_FATOR},
+    {"sk_plr_num_shotgun_pellets", BAGOS_FATOR},
+    {"sk_plr_dmg_buckshot", DANO_TIRO_CHEIO / BAGOS_FATOR},
 };
 enum { N_MUNICAO = (int)(sizeof(kMunicao) / sizeof(*kMunicao)) };
 static uint32_t municao_cv[N_MUNICAO];
@@ -423,21 +434,21 @@ static void ajustar_municao(CPU *c, uint64_t agora) {
     for (int i = 0; i < N_MUNICAO; ++i) {
         if (!municao_cv[i]) {
             if (agora < proxima_busca_municao) { ++faltam; continue; }
-            municao_cv[i] = rt_ios_find_convar(c, kMunicao[i]);
+            municao_cv[i] = rt_ios_find_convar(c, kMunicao[i].nome);
             if (!municao_cv[i]) { ++faltam; continue; }
         }
         const char *jogo = rt_ios_convar_string(municao_cv[i]);
         if (!jogo[0] || !strcmp(jogo, municao_posto[i])) continue;
         char quero[16];
-        snprintf(quero, sizeof(quero), "%d", (int)(atof(jogo) * MUNICAO_FATOR + .5));
+        snprintf(quero, sizeof(quero), "%d", (int)(atof(jogo) * kMunicao[i].fator + .5));
         char antes[16];
         snprintf(antes, sizeof(antes), "%s", jogo);
         if (rt_ios_set_convar(c, municao_cv[i], quero)) {
-            fprintf(stderr, "[hl2ios] munição: %s %s -> %s\n", kMunicao[i], antes, quero);
+            fprintf(stderr, "[hl2ios] munição: %s %s -> %s\n", kMunicao[i].nome, antes, quero);
             snprintf(municao_posto[i], sizeof(municao_posto[i]), "%s", quero);
         } else {
             // Não pegou: guarda o valor do jogo para não tentar de novo a cada segundo.
-            fprintf(stderr, "[hl2ios] munição: %s não aceitou %s (fica %s)\n", kMunicao[i], quero, antes);
+            fprintf(stderr, "[hl2ios] munição: %s não aceitou %s (fica %s)\n", kMunicao[i].nome, quero, antes);
             snprintf(municao_posto[i], sizeof(municao_posto[i]), "%s", rt_ios_convar_string(municao_cv[i]));
         }
     }
@@ -445,7 +456,7 @@ static void ajustar_municao(CPU *c, uint64_t agora) {
         proxima_busca_municao = agora + 5000;   // o server.so pode ainda não ter carregado
         if (!municao_avisada) {
             municao_avisada = 1;
-            fprintf(stderr, "[hl2ios] munição: %d variáveis sk_max_* ainda não achadas, tento de novo\n", faltam);
+            fprintf(stderr, "[hl2ios] munição: %d variáveis sk_* ainda não achadas, tento de novo\n", faltam);
         }
     }
 }

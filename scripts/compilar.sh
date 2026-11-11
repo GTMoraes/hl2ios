@@ -28,9 +28,10 @@ with open(destino, 'w') as f:
 print('config/local.json: Metal %s' % ('sim' if metal else 'NÃO (só OpenGL)'))
 PYEOF
 
-# 1. módulos preparados (segundos). Do cache quando o depot, o commit e a pasta são os mesmos.
+# 1. módulos preparados (segundos). Do cache quando o depot, os ajustes dele
+# (scripts/ajustar-depot.py), o commit e a pasta são os mesmos.
 CARIMBO="build/.hl2ios-carimbo"
-ESPERADO="$DEPOT_SHA256 $RECOMP_COMMIT $RECOMP"
+ESPERADO="$DEPOT_SHA256 ajustes-${DEPOT_AJUSTES:-0} $RECOMP_COMMIT $RECOMP"
 if [ -f build/hl2/prep/layout.json ] && [ "$(cat "$CARIMBO" 2>/dev/null || true)" = "$ESPERADO" ]; then
 	echo "módulos preparados: do cache"
 else

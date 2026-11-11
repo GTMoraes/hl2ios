@@ -43,3 +43,6 @@ for f in hl2_linux bin/engine.so bin/shaderapivk.so hl2_complete/bin/client.so h
 	[ -f "$DEPOT/$f" ] || { erro "falta $f no depot"; exit 1; }
 done
 echo "depot aberto: $(find "$DEPOT" -type f | wc -l | tr -d ' ') arquivos, $(du -sh "$DEPOT" | awk '{print $1}')"
+
+# ajustes de bytes nos binários (scripts/ajustar-depot.py), antes da tradução
+python3 "$RAIZ/scripts/ajustar-depot.py" "$DEPOT" || { erro "um ajuste do depot não conferiu"; exit 1; }

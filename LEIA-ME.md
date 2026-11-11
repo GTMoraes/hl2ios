@@ -79,6 +79,8 @@ O projeto foi feito para um Mac com o iPhone no cabo. Aqui não há Mac, então:
    abaixa a arma; o primeiro toque no tiro só a levanta. Detalhes em "Guardar arma".
 11. **Munição de reserva em triplo** (`extras/hl2ios_jogo.c`): o máximo de cada munição que o
    jogador carrega é o triplo do jogo. Detalhes em "Munição de reserva".
+12. **Escopeta com o dobro de bagos** (`extras/hl2ios_jogo.c` e `scripts/ajustar-depot.py`): o
+   tiro cheio dá 1,5 vez o dano original. Detalhes em "Escopeta".
 
 O binário de Mac que vem esquecido no depot (`bin/ffmpegsumo.so`) é tirado do app: binário Mach-O
 solto é recusado no envio, e o jogo não usa esse arquivo.
@@ -240,6 +242,26 @@ variáveis `sk_max_*` (`sk_max_pistol`, `sk_max_357`, `sk_max_smg1`, `sk_max_smg
 se o valor não é o que ele pôs, é um valor novo do jogo, e o app põe o triplo dele. Elas não são
 de trapaça, então o `sv_cheats` não as afeta. O registro mostra cada troca nas linhas
 `[hl2ios] munição:`. Para mudar o fator, troque `MUNICAO_FATOR` em `extras/hl2ios_jogo.c`.
+
+### Escopeta
+
+O tiro normal e o tiro duplo da escopeta têm o dobro de bagos, e o dano de cada bago do jogador
+cai a 3/4: o tiro cheio (todos os bagos acertando) dá 1,5 vez o dano original.
+
+| Tiro | Original | Agora |
+|---|---|---|
+| Normal | 7 bagos x 8 = 56 | 14 bagos x 6 = 84 |
+| Duplo | 12 bagos x 8 = 96 | 24 bagos x 6 = 144 |
+
+- O tiro normal usa a variável `sk_plr_num_shotgun_pellets` (dobrada pelo app) e o dano de cada
+  bago, `sk_plr_dmg_buckshot` (posta a 3/4 pelo app), do mesmo jeito que a munição de reserva.
+  Os fatores ficam em `BAGOS_FATOR` e `DANO_TIRO_CHEIO`, em `extras/hl2ios_jogo.c`.
+- O tiro duplo tem os 12 bagos fixos no código do jogo. O `scripts/ajustar-depot.py` troca esse
+  número por 24 no `server.so` logo depois de baixar o depot (o `scripts/baixar-depot.sh` o chama),
+  antes da tradução; ele confere os bytes originais e para o build se não conferirem.
+- O dano dos NPCs com escopeta (`sk_npc_dmg_buckshot`) não muda.
+- Ao mudar a lista de ajustes de bytes, suba `DEPOT_AJUSTES` em `versoes.env`: o build seguinte
+  refaz os módulos preparados e a tradução inteira (uma a duas horas).
 
 ### Posição e FOV da arma
 
