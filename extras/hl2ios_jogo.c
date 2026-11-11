@@ -358,6 +358,9 @@ static void ajustar_fov(CPU *c) {
 }
 
 static uint64_t selecao_ate;   // seleção de arma aberta pelo HUD: o tiro confirma
+// Menu de pausa pedido pelo editor (-1: nada). Pelos comandos do motor, chamados direto: o Esc
+// enviado com a janela do editor por cima não fechava o menu.
+static int menu_pedido = -1;
 static int visto_bloqueia, visto_guardada;
 
 static void conferir_versao(void) {
@@ -371,9 +374,13 @@ static void conferir_versao(void) {
 
 void hl2ios_jogo_poll(void) {
     uint64_t agora = SDL_GetTicks64();
-    if (!fila_n && !pedido && agora < proxima_leitura) { conferir_versao(); return; }
+    if (!fila_n && !pedido && menu_pedido < 0 && agora < proxima_leitura) { conferir_versao(); return; }
     CPU *c = rt_foreign_thread_attach();
     if (!c) return;
+    if (menu_pedido >= 0) {
+        rt_ios_run_console_command(c, menu_pedido ? "gameui_activate" : "gameui_hide");
+        menu_pedido = -1;
+    }
     while (fila_n) {
         executar(c, fila[fila_inicio]);
         fila_inicio = (fila_inicio + 1) % FILA;
@@ -390,6 +397,9 @@ void hl2ios_jogo_poll(void) {
 
 // ---- consultas da camada de toque ----
 
+void hl2ios_jogo_menu(int mostrar) {
+    menu_pedido = mostrar ? 1 : 0;
+}
 void hl2ios_jogo_guardar(void) {
     pedido = PEDIDO_ALTERNAR;
 }

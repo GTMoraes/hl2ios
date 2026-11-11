@@ -214,13 +214,13 @@ nas linhas `[hl2ios] arma:`.
 
 ### Posição e FOV da arma
 
-**Arma** (no painel) mostra só uma barra no alto, fecha o menu de pausa e deixa o jogo rodando
-atrás, para ver a arma ao vivo, balançando. Os controles de toque ficam bloqueados enquanto isso:
+**Arma** (no painel) mostra só uma barra no alto, fecha o menu de pausa (`gameui_hide`) e deixa o
+jogo rodando atrás, para ver a arma ao vivo, balançando. Os controles de toque ficam bloqueados enquanto isso:
 faça o ajuste num lugar sem inimigo.
 
 - **Frente** (+ afasta, - aproxima), **Lado** (+ direita) e **Altura** (+ sobe): de -12 a +12
   unidades do jogo, em passos de 0,5.
-- **FOV da arma:** de 40 a 110 (o do jogo é 54). Vale só para a arma, não para o mundo.
+- **FOV da arma:** de 20 a 110 (o do jogo é 54). Vale só para a arma, não para o mundo.
 - Cada arma guarda o seu ajuste; a barra mostra a que está na mão. Troque de arma (pelo jogo ou
   pelos botões) com a barra aberta para ajustar outra.
 - **Padrão desta arma** volta a arma na mão para o do jogo. **Copiar para todas** leva o ajuste

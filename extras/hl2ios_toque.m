@@ -130,7 +130,7 @@ typedef struct {
     float frente, lado, altura;   // unidades do jogo, nos eixos da câmera
     float fov;                    // FOV da arma (0: o do jogo)
 } ArmaAj;
-static const float kDeslocMax = 12, kFovMin = 40, kFovMax = 110, kFovJogo = 54;
+static const float kDeslocMax = 12, kFovMin = 20, kFovMax = 110, kFovJogo = 54;
 
 // Nomes das armas no editor (as que não estão aqui aparecem pelo nome de rede).
 static const struct { const char *classe, *nome; } kNomesArmas[] = {
@@ -547,7 +547,6 @@ void hl2ios_toque_executar(int i, int apertou) {
 
 static void editor_fechar(int salvou);
 static UIWindow *janela;
-static void (^ao_pausar)(int pausar);   // touch_controls.m: fecha (0) ou abre (1) o menu de pausa
 
 // O campo do comando só recebe o teclado na janela principal: o editor a pega enquanto o campo
 // está em uso e a devolve (à do SDL) quando ele termina ou o editor fecha.
@@ -1161,7 +1160,7 @@ static NSString *numero_texto(NSString *nome, float v) {
     classeVista = nil;
     selecionado = -1;
     arrasto = nil;
-    if (ao_pausar) ao_pausar(0);
+    hl2ios_jogo_menu(0);   // despausa: a arma aparece ao vivo
     __weak HL2EdTela *fraca = self;
     relogio = [NSTimer scheduledTimerWithTimeInterval:.25 repeats:YES block:^(NSTimer *t) {
         (void)t;
@@ -1178,7 +1177,7 @@ static NSString *numero_texto(NSString *nome, float v) {
     modoArma = NO;
     [relogio invalidate];
     relogio = nil;
-    if (ao_pausar) ao_pausar(1);
+    hl2ios_jogo_menu(1);
     [self redesenhar];
 }
 - (void)mudouArma:(UISlider *)s {
@@ -1626,10 +1625,6 @@ static CGFloat enfileirar(NSArray<UIView *> *vistas, const CGFloat *larguras, CG
 
 static void (^ao_fechar)(int);
 static CFRunLoopObserverRef observador;
-
-void hl2ios_toque_editor_pausa(void (^pausar)(int pausar)) {
-    ao_pausar = [pausar copy];
-}
 
 static void editor_fechar(int salvou) {
     if (!janela) return;

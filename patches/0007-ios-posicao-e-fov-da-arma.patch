@@ -13,18 +13,3 @@
  }
  
  
---- a/runtime/ios/touch_controls.m
-+++ b/runtime/ios/touch_controls.m
-@@ -432,6 +432,12 @@
- - (void)openEditor {
-     [self tapKey:SDL_SCANCODE_ESCAPE];
-     __weak P2TouchControls *weakSelf = self;
-+    // Réglage de l'arme (hl2ios_toque.m) : le jeu tourne derrière (menu de pause fermé), puis
-+    // le menu revient ; Échap seulement si l'état n'est pas déjà le bon.
-+    hl2ios_toque_editor_pausa(^(int pausar) {
-+        P2TouchControls *s = weakSelf;
-+        if (s && (rt_ios_game_ui_visible() != 0) != (pausar != 0)) [s tapKey:SDL_SCANCODE_ESCAPE];
-+    });
-     hl2ios_toque_editor_abrir(^(int salvou) {
-         P2TouchControls *s = weakSelf;
-         if (!s) return;

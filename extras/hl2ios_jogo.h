@@ -19,6 +19,10 @@ void hl2ios_jogo_guardar(void);
 // Saca a arma guardada (toque no tiro com a arma guardada).
 void hl2ios_jogo_sacar(void);
 
+// Fecha (0) ou abre (1) o menu de pausa do jogo (gameui_hide, gameui_activate), no próximo
+// quadro: o ajuste da arma no editor mostra o jogo rodando atrás.
+void hl2ios_jogo_menu(int mostrar);
+
 // Botão de arma (slot1 a slot6, lastinv) apertado: com a arma guardada, o tiro passa por 3 s,
 // porque com hud_fastswitch 0 é ele que confirma a escolha no HUD.
 void hl2ios_jogo_selecao(void);

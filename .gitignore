@@ -44,3 +44,13 @@ _subir/
 
 # python
 __pycache__/
+
+# mods do jogo (armas, texturas, sons): ficam só na máquina e no iPhone
+custom/
+mods/
+*.vtx
+*.vvd
+*.phy
+*.pcf
+*.ani
+*.cache
